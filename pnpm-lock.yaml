@@ -42,6 +42,19 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@24.13.3)
 
+  packages/contracts:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@24.13.3)
+
 packages:
 
   '@babel/code-frame@7.29.7':
