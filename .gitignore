@@ -1,8 +1,8 @@
 .superpowers/
+.worktrees/
 .env
 .env.*
 node_modules/
 .next/
 dist/
 coverage/
-
