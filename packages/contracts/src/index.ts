@@ -6,7 +6,7 @@ export {
   ExecutionPacketSchema,
   ExecutionPhaseSchema,
   ExecutionStatusSchema
-} from "./execution";
+} from "./execution.js";
 
 export type {
   ActionConfirmation,
@@ -16,4 +16,4 @@ export type {
   ExecutionPacket,
   ExecutionPhase,
   ExecutionStatus
-} from "./execution";
+} from "./execution.js";
