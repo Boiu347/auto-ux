@@ -1,5 +1,7 @@
 export {
+  ActionConfirmationSchema,
   ConfirmationActionSchema,
+  ExecutionEvidenceSchema,
   ExecutionEventSchema,
   ExecutionPacketSchema,
   ExecutionPhaseSchema,
@@ -7,7 +9,9 @@ export {
 } from "./execution";
 
 export type {
+  ActionConfirmation,
   ConfirmationAction,
+  ExecutionEvidence,
   ExecutionEvent,
   ExecutionPacket,
   ExecutionPhase,
