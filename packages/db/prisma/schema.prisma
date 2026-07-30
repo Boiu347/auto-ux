@@ -1,0 +1,162 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String        @id
+  createdAt     DateTime      @default(now())
+  executions    Execution[]   @relation("ExecutionUser")
+  configDrafts  ConfigDraft[] @relation("ConfigDraftAuthor")
+  confirmations Confirmation[] @relation("ConfirmationUser")
+  auditEvents   AuditEvent[]  @relation("AuditActor")
+}
+
+model Workspace {
+  id            String        @id
+  createdAt     DateTime      @default(now())
+  localAgents   LocalAgent[]
+  configDrafts  ConfigDraft[]
+  executions    Execution[]
+  confirmations Confirmation[]
+  robotBindings RobotBinding[]
+  auditEvents   AuditEvent[]
+}
+
+model LocalAgent {
+  id              String         @id
+  workspaceId     String
+  version         String
+  capabilities    Json
+  lastHeartbeatAt DateTime?
+  createdAt       DateTime       @default(now())
+  workspace       Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  robotBindings   RobotBinding[]
+
+  @@index([workspaceId])
+}
+
+model ConfigDraft {
+  id                  String    @id @default(cuid())
+  userId              String
+  workspaceId         String
+  version             Int
+  sourceReferenceHash String
+  structuredConfig    Json
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  user                User      @relation("ConfigDraftAuthor", fields: [userId], references: [id], onDelete: Cascade)
+  workspace           Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId, version])
+  @@index([workspaceId])
+}
+
+model Execution {
+  id                     String               @id
+  userId                 String
+  workspaceId            String
+  configVersion          Int
+  status                 String
+  phase                  String
+  targetPolicy           String
+  executionLockAgentId   String?
+  executionLockExpiresAt DateTime?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  user                   User                 @relation("ExecutionUser", fields: [userId], references: [id], onDelete: Restrict)
+  workspace              Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  steps                  ExecutionStep[]
+  operations             ExecutionOperation[]
+  confirmations          Confirmation[]
+  robotBindings          RobotBinding[]
+  auditEvents            AuditEvent[]
+
+  @@unique([id, userId, workspaceId])
+  @@index([userId, workspaceId, createdAt])
+  @@index([executionLockExpiresAt])
+}
+
+model ExecutionStep {
+  id          String    @id @default(cuid())
+  executionId String
+  stepId      String
+  attempt     Int
+  status      String
+  inputHash   String
+  evidence    Json
+  errorCode   String?
+  nextAction  String
+  occurredAt  DateTime
+  execution   Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@unique([executionId, stepId, attempt])
+  @@index([executionId, occurredAt])
+}
+
+model ExecutionOperation {
+  id          String    @id @default(cuid())
+  executionId String
+  fingerprint String
+  status      String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  execution   Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@unique([executionId, fingerprint])
+}
+
+model Confirmation {
+  id             String    @id @default(cuid())
+  executionId    String
+  userId         String
+  workspaceId    String
+  action         String
+  configVersion  Int
+  tokenHash      String
+  expiresAt      DateTime
+  consumedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  execution      Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  user           User      @relation("ConfirmationUser", fields: [userId], references: [id], onDelete: Restrict)
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+
+  @@index([executionId, expiresAt])
+  @@index([userId, workspaceId])
+}
+
+model RobotBinding {
+  id                  String     @id @default(cuid())
+  workspaceId         String
+  executionId         String?
+  agentId             String
+  platformRobotRef    String
+  displayName         String
+  createdAt           DateTime   @default(now())
+  workspace           Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  execution           Execution? @relation(fields: [executionId], references: [id], onDelete: SetNull)
+  agent               LocalAgent @relation(fields: [agentId], references: [id], onDelete: Restrict)
+
+  @@unique([workspaceId, platformRobotRef])
+  @@index([agentId])
+}
+
+model AuditEvent {
+  id          String     @id @default(cuid())
+  workspaceId String
+  actorUserId String
+  executionId String?
+  action      String
+  facts       Json
+  createdAt   DateTime   @default(now())
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  actor       User       @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  execution   Execution? @relation(fields: [executionId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([executionId, createdAt])
+}

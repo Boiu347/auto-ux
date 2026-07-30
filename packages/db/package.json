@@ -1,0 +1,20 @@
+{
+  "name": "@app/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prisma:migrate": "DATABASE_URL=postgresql://control_plane:control_plane@localhost:5432/control_plane?schema=public prisma migrate dev --name init",
+    "test": "DATABASE_URL=postgresql://control_plane:control_plane@localhost:5432/control_plane?schema=public vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@app/contracts": "workspace:*",
+    "@prisma/client": "^6.19.0"
+  },
+  "devDependencies": {
+    "prisma": "^6.19.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}
