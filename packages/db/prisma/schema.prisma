@@ -147,6 +147,7 @@ model Execution {
 
 model ExecutionStep {
   id          String          @id @default(cuid())
+  sequence    BigInt          @unique @default(autoincrement())
   executionId String
   stepId      String
   attempt     Int
@@ -194,6 +195,7 @@ model Confirmation {
 
   @@index([executionId, expiresAt])
   @@index([userId, workspaceId])
+  @@unique([tokenHash])
 }
 
 model WorkspaceMember {

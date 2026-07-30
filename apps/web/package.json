@@ -12,9 +12,12 @@
   },
   "dependencies": {
     "@app/contracts": "workspace:*",
+    "@app/db": "workspace:*",
+    "@app/execution-core": "workspace:*",
     "next": "^16.0.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

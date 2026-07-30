@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "prisma:migrate": "DATABASE_URL=postgresql://control_plane:control_plane@localhost:5432/control_plane?schema=public prisma migrate dev --name init",
     "test": "DATABASE_URL=postgresql://control_plane:control_plane@localhost:5432/control_plane?schema=public vitest run",

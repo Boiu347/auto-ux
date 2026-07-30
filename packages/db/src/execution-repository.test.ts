@@ -344,4 +344,322 @@ describe("PrismaExecutionRepository", () => {
       } as unknown as ExecutionEvent)
     ).rejects.toThrow();
   });
+
+  it("allows exactly one atomic confirmation consumer", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+    const confirmation = await repository.createConfirmation({
+      id: "confirm:1111111111111111",
+      executionId: execution.id,
+      action: "publish",
+      configVersion: 1,
+      tokenHash: "sha256:1111111111111111",
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+
+    const results = await Promise.all(
+      Array.from({ length: 24 }, () =>
+        repository.consumeConfirmation({
+          confirmationId: confirmation.id,
+          executionId: execution.id,
+          action: "publish",
+          configVersion: 1,
+          tokenHash: "sha256:1111111111111111"
+        })
+      )
+    );
+
+    expect(results.filter((result) => result !== null)).toHaveLength(1);
+  });
+
+  it("binds confirmation consumption without consuming a mismatched record", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 3
+    });
+    const confirmation = await repository.createConfirmation({
+      id: "confirm:2222222222222222",
+      executionId: execution.id,
+      action: "start_dial",
+      configVersion: 3,
+      tokenHash: "sha256:2222222222222222",
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+    const otherRepository = new PrismaExecutionRepository(prisma, {
+      userId: "U-2",
+      workspaceId: "W-1"
+    });
+
+    for (const mismatch of [
+      { action: "publish" as const },
+      { executionId: "execution_other" },
+      { configVersion: 4 },
+      { tokenHash: "sha256:wrong" }
+    ]) {
+      await expect(
+        repository.consumeConfirmation({
+          confirmationId: confirmation.id,
+          executionId: execution.id,
+          action: "start_dial",
+          configVersion: 3,
+          tokenHash: "sha256:2222222222222222",
+          ...mismatch
+        })
+      ).resolves.toBeNull();
+    }
+    await expect(
+      otherRepository.consumeConfirmation({
+        confirmationId: confirmation.id,
+        executionId: execution.id,
+        action: "start_dial",
+        configVersion: 3,
+        tokenHash: "sha256:2222222222222222"
+      })
+    ).resolves.toBeNull();
+    await expect(
+      repository.consumeConfirmation({
+        confirmationId: confirmation.id,
+        executionId: execution.id,
+        action: "start_dial",
+        configVersion: 3,
+        tokenHash: "sha256:2222222222222222"
+      })
+    ).resolves.toMatchObject({
+      id: confirmation.id,
+      userId: "U-1",
+      workspaceId: "W-1",
+      action: "start_dial",
+      configVersion: 3
+    });
+  });
+
+  it("rejects expired confirmations and rehydrates an unconsumed record after restart", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 5
+    });
+    const expired = await repository.createConfirmation({
+      id: "confirm:3333333333333333",
+      executionId: execution.id,
+      action: "import_numbers",
+      configVersion: 5,
+      tokenHash: "sha256:3333333333333333",
+      expiresAt: new Date(Date.now() - 1_000)
+    });
+    const durable = await repository.createConfirmation({
+      id: "confirm:4444444444444444",
+      executionId: execution.id,
+      action: "import_numbers",
+      configVersion: 5,
+      tokenHash: "sha256:4444444444444444",
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+
+    await expect(
+      repository.consumeConfirmation({
+        confirmationId: expired.id,
+        executionId: execution.id,
+        action: "import_numbers",
+        configVersion: 5,
+        tokenHash: "sha256:3333333333333333"
+      })
+    ).resolves.toBeNull();
+
+    const restartedRepository = new PrismaExecutionRepository(prisma, {
+      userId: "U-1",
+      workspaceId: "W-1"
+    });
+    await expect(
+      restartedRepository.consumeConfirmation({
+        confirmationId: durable.id,
+        executionId: execution.id,
+        action: "import_numbers",
+        configVersion: 5,
+        tokenHash: "sha256:4444444444444444"
+      })
+    ).resolves.toMatchObject({
+      id: durable.id,
+      executionId: execution.id,
+      action: "import_numbers",
+      consumedAt: expect.any(Date)
+    });
+  });
+
+  it("lists persisted step events with a reconnect-safe insertion cursor", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+    await repository.appendStepEvent({
+      ...event,
+      executionId: execution.id,
+      attempt: 1
+    });
+    await repository.appendStepEvent({
+      ...event,
+      executionId: execution.id,
+      attempt: 2,
+      stepId: "robot.create"
+    });
+
+    const allEvents = await repository.listStepEventsAfter(execution.id);
+    expect(allEvents.map(({ event: persisted }) => persisted.stepId)).toEqual([
+      "environment.preflight",
+      "robot.create"
+    ]);
+    await expect(
+      repository.listStepEventsAfter(execution.id, allEvents[0]!.cursor)
+    ).resolves.toMatchObject([
+      {
+        cursor: allEvents[1]!.cursor,
+        event: { stepId: "robot.create" }
+      }
+    ]);
+  });
+
+  it("atomically rechecks the agent lock and expected execution state when appending", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+    await repository.acquireLock(execution.id, "agent-owner", 60);
+    const executionEvent = {
+      ...event,
+      executionId: execution.id,
+      stepId: "source.parse" as const
+    };
+
+    await expect(
+      repository.appendStepEventForAgent({
+        agentId: "agent-other",
+        event: executionEvent,
+        expectedState: { status: "pending", phase: "source_parse" },
+        nextState: { status: "running", phase: "source_parse" }
+      })
+    ).resolves.toBe("lock_mismatch");
+    await expect(
+      repository.appendStepEventForAgent({
+        agentId: "agent-owner",
+        event: executionEvent,
+        expectedState: { status: "pending", phase: "source_parse" },
+        nextState: { status: "running", phase: "source_parse" }
+      })
+    ).resolves.toBe("appended");
+    await expect(
+      repository.appendStepEventForAgent({
+        agentId: "agent-owner",
+        event: { ...executionEvent, attempt: 2 },
+        expectedState: { status: "pending", phase: "source_parse" },
+        nextState: { status: "succeeded", phase: "source_parse" }
+      })
+    ).resolves.toBe("state_mismatch");
+    await expect(
+      repository.findByIdForUser(execution.id, "U-1", "W-1")
+    ).resolves.toMatchObject({
+      status: "running",
+      phase: "source_parse"
+    });
+  });
+
+  it("consumes confirmation only inside a successful event transaction", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+    const eventInput = {
+      ...event,
+      executionId: execution.id,
+      stepId: "source.parse" as const
+    };
+    const firstConfirmation = await repository.createConfirmation({
+      id: "confirm:5555555555555555",
+      executionId: execution.id,
+      action: "publish",
+      configVersion: 1,
+      tokenHash: "sha256:5555555555555555",
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+
+    await expect(
+      repository.appendStepEventForAgent({
+        agentId: "agent-owner",
+        event: eventInput,
+        expectedState: { status: "pending", phase: "source_parse" },
+        nextState: { status: "running", phase: "source_parse" },
+        confirmation: {
+          confirmationId: firstConfirmation.id,
+          executionId: execution.id,
+          action: "publish",
+          configVersion: 1,
+          tokenHash: "sha256:5555555555555555"
+        }
+      })
+    ).resolves.toBe("lock_mismatch");
+    await repository.acquireLock(execution.id, "agent-owner", 60);
+    await expect(
+      repository.appendStepEventForAgent({
+        agentId: "agent-owner",
+        event: eventInput,
+        expectedState: { status: "running", phase: "source_parse" },
+        nextState: { status: "running", phase: "source_parse" },
+        confirmation: {
+          confirmationId: firstConfirmation.id,
+          executionId: execution.id,
+          action: "publish",
+          configVersion: 1,
+          tokenHash: "sha256:5555555555555555"
+        }
+      })
+    ).resolves.toBe("state_mismatch");
+    await expect(
+      repository.consumeConfirmation({
+        confirmationId: firstConfirmation.id,
+        executionId: execution.id,
+        action: "publish",
+        configVersion: 1,
+        tokenHash: "sha256:5555555555555555"
+      })
+    ).resolves.toMatchObject({ id: firstConfirmation.id });
+
+    const secondConfirmation = await repository.createConfirmation({
+      id: "confirm:6666666666666666",
+      executionId: execution.id,
+      action: "publish",
+      configVersion: 1,
+      tokenHash: "sha256:6666666666666666",
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+    await expect(
+      repository.appendStepEventForAgent({
+        agentId: "agent-owner",
+        event: eventInput,
+        expectedState: { status: "pending", phase: "source_parse" },
+        nextState: { status: "running", phase: "source_parse" },
+        confirmation: {
+          confirmationId: secondConfirmation.id,
+          executionId: execution.id,
+          action: "publish",
+          configVersion: 1,
+          tokenHash: "sha256:6666666666666666"
+        }
+      })
+    ).resolves.toBe("appended");
+    await expect(
+      repository.consumeConfirmation({
+        confirmationId: secondConfirmation.id,
+        executionId: execution.id,
+        action: "publish",
+        configVersion: 1,
+        tokenHash: "sha256:6666666666666666"
+      })
+    ).resolves.toBeNull();
+  });
 });
