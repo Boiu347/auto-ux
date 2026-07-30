@@ -6,6 +6,8 @@ CREATE TYPE "ConfirmationAction" AS ENUM ('publish','import_numbers','start_dial
 
 CREATE TABLE "WorkspaceMember" ("userId" TEXT NOT NULL, "workspaceId" TEXT NOT NULL, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT "WorkspaceMember_pkey" PRIMARY KEY ("userId", "workspaceId"));
 INSERT INTO "WorkspaceMember" ("userId", "workspaceId") SELECT DISTINCT "userId", "workspaceId" FROM "Execution" ON CONFLICT DO NOTHING;
+INSERT INTO "WorkspaceMember" ("userId", "workspaceId") SELECT DISTINCT "actorUserId", "workspaceId" FROM "AuditEvent" ON CONFLICT DO NOTHING;
+INSERT INTO "WorkspaceMember" ("userId", "workspaceId") SELECT DISTINCT "userId", "workspaceId" FROM "Confirmation" ON CONFLICT DO NOTHING;
 
 ALTER TABLE "Execution" ALTER COLUMN "status" TYPE "ExecutionStatus" USING "status"::"ExecutionStatus";
 ALTER TABLE "Execution" ALTER COLUMN "phase" TYPE "ExecutionPhase" USING "phase"::"ExecutionPhase";
@@ -24,6 +26,6 @@ ALTER TABLE "Execution" ADD CONSTRAINT "Execution_member_fkey" FOREIGN KEY ("use
 ALTER TABLE "Confirmation" ADD CONSTRAINT "Confirmation_member_fkey" FOREIGN KEY ("userId", "workspaceId") REFERENCES "WorkspaceMember"("userId", "workspaceId") ON DELETE RESTRICT;
 ALTER TABLE "Confirmation" ADD CONSTRAINT "Confirmation_execution_scope_fkey" FOREIGN KEY ("executionId", "userId", "workspaceId") REFERENCES "Execution"("id", "userId", "workspaceId") ON DELETE CASCADE;
 ALTER TABLE "RobotBinding" ADD CONSTRAINT "RobotBinding_agent_scope_fkey" FOREIGN KEY ("agentId", "workspaceId") REFERENCES "LocalAgent"("id", "workspaceId") ON DELETE RESTRICT;
-ALTER TABLE "RobotBinding" ADD CONSTRAINT "RobotBinding_execution_scope_fkey" FOREIGN KEY ("executionId", "workspaceId") REFERENCES "Execution"("id", "workspaceId") ON DELETE SET NULL;
+ALTER TABLE "RobotBinding" ADD CONSTRAINT "RobotBinding_execution_scope_fkey" FOREIGN KEY ("executionId", "workspaceId") REFERENCES "Execution"("id", "workspaceId") ON DELETE NO ACTION;
 ALTER TABLE "AuditEvent" ADD CONSTRAINT "AuditEvent_member_fkey" FOREIGN KEY ("actorUserId", "workspaceId") REFERENCES "WorkspaceMember"("userId", "workspaceId") ON DELETE RESTRICT;
-ALTER TABLE "AuditEvent" ADD CONSTRAINT "AuditEvent_execution_scope_fkey" FOREIGN KEY ("executionId", "actorUserId", "workspaceId") REFERENCES "Execution"("id", "userId", "workspaceId") ON DELETE SET NULL;
+ALTER TABLE "AuditEvent" ADD CONSTRAINT "AuditEvent_execution_scope_fkey" FOREIGN KEY ("executionId", "actorUserId", "workspaceId") REFERENCES "Execution"("id", "userId", "workspaceId") ON DELETE NO ACTION;

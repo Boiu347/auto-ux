@@ -232,7 +232,7 @@ describe("PrismaExecutionRepository", () => {
           workspaceId: "W-1",
           actorUserId: "U-2",
           executionId: execution.id,
-          action: "execution.inspect",
+          action: "configure",
           facts: {}
         }
       })
@@ -248,17 +248,81 @@ describe("PrismaExecutionRepository", () => {
     const claim = await repository.claimOperation(execution.id, "fingerprint-1");
 
     await expect(
-      prisma.$executeRaw`UPDATE "Execution" SET "targetPolicy" = ${"mutate_existing"} WHERE "id" = ${execution.id}`
+      prisma.$executeRawUnsafe(
+        `UPDATE "Execution" SET "targetPolicy" = 'mutate_existing'`
+      )
     ).rejects.toThrow();
     await expect(
-      prisma.$executeRaw`UPDATE "Execution" SET "status" = ${"not_a_status"} WHERE "id" = ${execution.id}`
+      prisma.$executeRawUnsafe(`UPDATE "Execution" SET "status" = 'not_a_status'`)
     ).rejects.toThrow();
     await expect(
-      prisma.$executeRaw`UPDATE "Execution" SET "phase" = ${"not_a_phase"} WHERE "id" = ${execution.id}`
+      prisma.$executeRawUnsafe(`UPDATE "Execution" SET "phase" = 'not_a_phase'`)
     ).rejects.toThrow();
     await expect(
-      prisma.$executeRaw`UPDATE "ExecutionOperation" SET "status" = ${"not_an_operation_status"} WHERE "executionId" = ${execution.id} AND "attempt" = ${claim.attempt!}`
+      prisma.$executeRawUnsafe(
+        `UPDATE "ExecutionOperation" SET "status" = 'not_an_operation_status'`
+      )
     ).rejects.toThrow();
+    expect(claim.claimed).toBe(true);
+  });
+
+  it("constrains step status, next action, and audit action in PostgreSQL", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+    await repository.appendStepEvent({ ...event, executionId: execution.id });
+
+    await expect(
+      prisma.$executeRawUnsafe(`UPDATE "ExecutionStep" SET "status" = 'not_a_status'`)
+    ).rejects.toThrow();
+    await expect(
+      prisma.$executeRawUnsafe(`UPDATE "ExecutionStep" SET "nextAction" = 'guess_success'`)
+    ).rejects.toThrow();
+    await prisma.auditEvent.create({
+      data: {
+        workspaceId: "W-1",
+        actorUserId: "U-1",
+        executionId: execution.id,
+        action: "configure",
+        facts: {}
+      }
+    });
+    await expect(
+      prisma.$executeRawUnsafe(`UPDATE "AuditEvent" SET "action" = 'not_an_audit_action'`)
+    ).rejects.toThrow();
+  });
+
+  it("preserves unknown step outcomes and accepts the documented audit actions", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+    await repository.appendStepEvent({
+      ...event,
+      executionId: execution.id,
+      status: "unknown",
+      nextAction: "wait_for_user"
+    });
+
+    for (const action of ["configure", "publish", "import_numbers", "start_dial"] as const) {
+      await prisma.auditEvent.create({
+        data: {
+          workspaceId: "W-1",
+          actorUserId: "U-1",
+          executionId: execution.id,
+          action,
+          facts: {}
+        }
+      });
+    }
+
+    await expect(repository.listStepEvents(execution.id)).resolves.toMatchObject([
+      { status: "unknown", nextAction: "wait_for_user" }
+    ]);
+    await expect(prisma.auditEvent.count()).resolves.toBe(4);
   });
 
   it("rejects raw phone and source fields at the repository boundary", async () => {
