@@ -14,17 +14,22 @@
     "@app/contracts": "workspace:*",
     "@app/db": "workspace:*",
     "@app/execution-core": "workspace:*",
+    "@fluentui/react-components": "^9.74.4",
     "next": "^16.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "eslint": "^9.0.0",
     "eslint-config-next": "^16.0.0",
+    "jsdom": "^30.0.1",
     "typescript": "^5.9.0",
     "vitest": "^3.2.4"
   }

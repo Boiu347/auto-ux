@@ -5,7 +5,8 @@ export default defineConfig({
     jsx: "automatic"
   },
   test: {
-    environment: "node",
-    include: ["src/**/*.test.{ts,tsx}"]
+    environment: "jsdom",
+    include: ["src/**/*.test.{ts,tsx}"],
+    setupFiles: ["./vitest.setup.ts"]
   }
 });
