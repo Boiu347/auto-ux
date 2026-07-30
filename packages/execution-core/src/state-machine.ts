@@ -81,17 +81,23 @@ export function transition(
     return "unknown";
   }
 
-  const recoveryAction = event.recovered ? highRiskPhaseActions[phase] : undefined;
+  const recoveryAction =
+    event.recovered && !advancing ? highRiskPhaseActions[phase] : undefined;
   if (recoveryAction) {
-    if (advancing) {
-      throw new Error("recovery may restart only the current high-risk phase");
-    }
+    const executionId = requireExecutionId(normalized);
+    const configVersion = requireConfigVersion(normalized);
     invalidateConfirmations(
       recoveryAction,
-      requireExecutionId(normalized),
-      requireConfigVersion(normalized)
+      executionId,
+      configVersion
     );
     return "waiting_confirmation";
+  }
+
+  if (!advancing && normalized.phase) {
+    if (consumeSamePhaseConfirmation(normalized, event.confirmation)) {
+      return nextStatus;
+    }
   }
 
   if (advancing && normalized.phase) {
@@ -181,6 +187,33 @@ function assertAdvanceAllowed(
   }
 
   throw new Error(`phase ${current.phase} must succeed before advancing`);
+}
+
+function consumeSamePhaseConfirmation(
+  current: ReturnType<typeof normalizeCurrent>,
+  grant: ConfirmationGrant | undefined
+): boolean {
+  if (!current.phase) {
+    return false;
+  }
+
+  const action = highRiskPhaseActions[current.phase];
+  if (!action || current.status !== "waiting_confirmation") {
+    return false;
+  }
+
+  if (
+    takeConfirmationGrant(
+      grant,
+      action,
+      requireExecutionId(current),
+      requireConfigVersion(current)
+    )
+  ) {
+    return true;
+  }
+
+  throw new Error(`${action} confirmation grant required`);
 }
 
 function requireExecutionId(current: ReturnType<typeof normalizeCurrent>): string {
