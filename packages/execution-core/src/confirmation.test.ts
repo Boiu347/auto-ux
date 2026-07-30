@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   canAttempt,
@@ -6,6 +6,10 @@ import {
   createActionFingerprint,
   issueConfirmation
 } from "./index.js";
+import {
+  __getConfirmationRegistrySizeForTests,
+  invalidateConfirmations
+} from "./confirmation.js";
 
 const futureDate = new Date("2099-01-01T00:00:00.000Z");
 
@@ -70,5 +74,36 @@ describe("confirmation", () => {
       ok: false,
       reason: "expired"
     });
+  });
+
+  it("prunes terminal confirmation records back to the prior registry size", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      const baseline = __getConfirmationRegistrySizeForTests();
+
+      for (let index = 0; index < 100; index += 1) {
+        const id = `EX-CONSUMED-${index}`;
+        const token = issueConfirmation("publish", id, 1, new Date(2_000));
+        expect(consumeConfirmation(token, "publish", id, 1).ok).toBe(true);
+      }
+      for (let index = 0; index < 100; index += 1) {
+        const id = `EX-EXPIRED-${index}`;
+        const token = issueConfirmation("import_numbers", id, 1, new Date(0));
+        expect(consumeConfirmation(token, "import_numbers", id, 1)).toEqual({
+          ok: false,
+          reason: "expired"
+        });
+      }
+      for (let index = 0; index < 100; index += 1) {
+        const id = `EX-INVALIDATED-${index}`;
+        issueConfirmation("start_dial", id, 1, new Date(2_000));
+        invalidateConfirmations("start_dial", id, 1);
+      }
+
+      now.mockReturnValue(2_001);
+      expect(__getConfirmationRegistrySizeForTests()).toBe(baseline);
+    } finally {
+      now.mockRestore();
+    }
   });
 });

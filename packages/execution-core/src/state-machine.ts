@@ -83,8 +83,8 @@ export function transition(
 
   const recoveryAction = event.recovered ? highRiskPhaseActions[phase] : undefined;
   if (recoveryAction) {
-    if (advancing && !hasSafeRecoveryPredecessor(normalized)) {
-      throw new Error(`phase ${normalized.phase} must succeed before advancing`);
+    if (advancing) {
+      throw new Error("recovery may restart only the current high-risk phase");
     }
     invalidateConfirmations(
       recoveryAction,
@@ -154,17 +154,6 @@ function assertDocumentedPhaseOrder(
   }
 
   throw new Error(`phase ${nextPhase} must follow ${current.phase}`);
-}
-
-function hasSafeRecoveryPredecessor(
-  current: ReturnType<typeof normalizeCurrent>
-): boolean {
-  return (
-    current.status === "succeeded" ||
-    (current.status === "waiting_confirmation" &&
-      current.phase !== undefined &&
-      highRiskPhaseActions[current.phase] !== undefined)
-  );
 }
 
 function assertAdvanceAllowed(

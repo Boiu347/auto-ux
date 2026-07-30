@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ExecutionPhase, ExecutionStatus } from "@app/contracts";
 
@@ -86,6 +86,25 @@ describe("transition", () => {
     (phase, nextPhase, status) => {
       expect(() =>
         transition(state(phase, status), { phase: nextPhase, status: "running" })
+      ).toThrow();
+    }
+  );
+
+  it.each(phases.slice(0, -1).flatMap((phase, index) =>
+    (["running", "failed", "waiting_confirmation"] as const).map((status) => [
+      phase,
+      phases[index + 1],
+      status
+    ] as const)
+  ))(
+    "does not let recovery advance %s to %s from %s",
+    (phase, nextPhase, status) => {
+      expect(() =>
+        transition(state(phase, status), {
+          phase: nextPhase,
+          status: "running",
+          recovered: true
+        })
       ).toThrow();
     }
   );
@@ -210,6 +229,36 @@ describe("transition", () => {
     ).toThrowError("publish confirmation grant required");
   });
 
+  it("rejects a grant that expires between consumption and transition", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      const grant = consumeGrant(
+        "publish",
+        "EX-1",
+        4,
+        new Date(2_000)
+      );
+      now.mockReturnValue(2_001);
+
+      expect(() =>
+        transition(state("publish_confirm", "waiting_confirmation"), {
+          phase: "publish_verify",
+          status: "running",
+          confirmation: grant
+        })
+      ).toThrowError("publish confirmation grant required");
+      expect(() =>
+        transition(state("publish_confirm", "waiting_confirmation"), {
+          phase: "publish_verify",
+          status: "running",
+          confirmation: grant
+        })
+      ).toThrowError("publish confirmation grant required");
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it.each([
     ["publish", "publish_confirm", "publish_verify"],
     ["import_numbers", "numbers_confirm", "dial_confirm"],
@@ -236,6 +285,39 @@ describe("transition", () => {
       ).toThrowError(`${action} confirmation grant required`);
     }
   );
+
+  it("rejects tokenless publish and import recovery across phases", () => {
+    expect(() =>
+      transition(state("publish_confirm", "waiting_confirmation"), {
+        phase: "publish_verify",
+        status: "running",
+        recovered: true
+      })
+    ).toThrow();
+    expect(() =>
+      transition(state("numbers_confirm", "waiting_confirmation"), {
+        phase: "dial_confirm",
+        status: "running",
+        recovered: true
+      })
+    ).toThrow();
+  });
+
+  it("requires a fresh publish grant after publish recovery", () => {
+    expect(
+      transition(state("publish_confirm", "waiting_confirmation"), {
+        phase: "publish_confirm",
+        status: "running",
+        recovered: true
+      })
+    ).toBe("waiting_confirmation");
+    expect(() =>
+      transition(state("publish_confirm", "waiting_confirmation"), {
+        phase: "publish_verify",
+        status: "running"
+      })
+    ).toThrowError("publish confirmation grant required");
+  });
 
   it("never promotes an unknown result to success", () => {
     expect(

@@ -49,11 +49,13 @@ interface TokenRecord {
 interface GrantRecord {
   token: TokenRecord;
   used: boolean;
+  binding: string;
 }
 
 const tokenRecords = new WeakMap<object, TokenRecord>();
 const grantRecords = new WeakMap<object, GrantRecord>();
 const tokenRecordsByBinding = new Map<string, Set<TokenRecord>>();
+const grantRecordsByBinding = new Map<string, Set<GrantRecord>>();
 
 /**
  * Issues an immutable, in-memory one-time confirmation bound to one action and execution.
@@ -65,6 +67,7 @@ export function issueConfirmation(
   expiresAt: Date
 ): ConfirmationToken {
   const validatedAction = ConfirmationActionSchema.parse(action);
+  pruneTerminalRecords(Date.now());
 
   if (!executionId) {
     throw new Error("executionId is required");
@@ -122,12 +125,20 @@ export function consumeConfirmation(
     return { ok: false, reason: "config_version_mismatch" };
   }
   if (record.expiresAt <= Date.now()) {
+    removeTokenRecord(record);
     return { ok: false, reason: "expired" };
   }
 
   record.consumedAt = Date.now();
+  removeTokenRecord(record);
   const grant = Object.freeze({}) as ConfirmationGrant;
-  grantRecords.set(grant, { token: record, used: false });
+  const grantRecord: GrantRecord = {
+    token: record,
+    used: false,
+    binding: bindingKey(record.action, record.executionId, record.configVersion)
+  };
+  grantRecords.set(grant, grantRecord);
+  addGrantRecord(grantRecord);
   return { ok: true, grant };
 }
 
@@ -148,6 +159,11 @@ export function takeConfirmationGrant(
   }
 
   const token = grantRecord.token;
+  if (token.expiresAt <= Date.now()) {
+    grantRecord.used = true;
+    removeGrantRecord(grantRecord);
+    return false;
+  }
   if (
     token.action !== action ||
     token.executionId !== executionId ||
@@ -157,6 +173,7 @@ export function takeConfirmationGrant(
   }
 
   grantRecord.used = true;
+  removeGrantRecord(grantRecord);
   return true;
 }
 
@@ -166,9 +183,27 @@ export function invalidateConfirmations(
   executionId: string,
   configVersion: number
 ): void {
-  for (const record of tokenRecordsByBinding.get(bindingKey(action, executionId, configVersion)) ?? []) {
+  const key = bindingKey(action, executionId, configVersion);
+  for (const record of tokenRecordsByBinding.get(key) ?? []) {
     record.invalidated = true;
   }
+  tokenRecordsByBinding.delete(key);
+  for (const record of grantRecordsByBinding.get(key) ?? []) {
+    record.token.invalidated = true;
+  }
+  grantRecordsByBinding.delete(key);
+}
+
+/** Test-only diagnostic; intentionally not re-exported from the package entrypoint. */
+export function __getConfirmationRegistrySizeForTests(): number {
+  pruneTerminalRecords(Date.now());
+  return [...tokenRecordsByBinding.values()].reduce(
+    (total, records) => total + records.size,
+    0
+  ) + [...grantRecordsByBinding.values()].reduce(
+    (total, records) => total + records.size,
+    0
+  );
 }
 
 function createToken(record: TokenRecord): ConfirmationToken {
@@ -193,6 +228,62 @@ function addTokenRecord(record: TokenRecord): void {
   const records = tokenRecordsByBinding.get(key) ?? new Set<TokenRecord>();
   records.add(record);
   tokenRecordsByBinding.set(key, records);
+}
+
+function removeTokenRecord(record: TokenRecord): void {
+  const key = bindingKey(record.action, record.executionId, record.configVersion);
+  const records = tokenRecordsByBinding.get(key);
+  if (!records) {
+    return;
+  }
+  records.delete(record);
+  if (records.size === 0) {
+    tokenRecordsByBinding.delete(key);
+  }
+}
+
+function addGrantRecord(record: GrantRecord): void {
+  const records = grantRecordsByBinding.get(record.binding) ?? new Set<GrantRecord>();
+  records.add(record);
+  grantRecordsByBinding.set(record.binding, records);
+}
+
+function removeGrantRecord(record: GrantRecord): void {
+  const records = grantRecordsByBinding.get(record.binding);
+  if (!records) {
+    return;
+  }
+  records.delete(record);
+  if (records.size === 0) {
+    grantRecordsByBinding.delete(record.binding);
+  }
+}
+
+function pruneTerminalRecords(now: number): void {
+  for (const [key, records] of tokenRecordsByBinding) {
+    for (const record of records) {
+      if (record.invalidated || record.consumedAt !== null || record.expiresAt <= now) {
+        records.delete(record);
+      }
+    }
+    if (records.size === 0) {
+      tokenRecordsByBinding.delete(key);
+    }
+  }
+  for (const [key, records] of grantRecordsByBinding) {
+    for (const record of records) {
+      if (
+        record.used ||
+        record.token.invalidated ||
+        record.token.expiresAt <= now
+      ) {
+        records.delete(record);
+      }
+    }
+    if (records.size === 0) {
+      grantRecordsByBinding.delete(key);
+    }
+  }
 }
 
 function bindingKey(
