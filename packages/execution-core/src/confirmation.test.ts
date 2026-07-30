@@ -30,7 +30,11 @@ describe("confirmation", () => {
   it("consumes a start_dial token only once", () => {
     const token = issueConfirmation("start_dial", "EX-1", 4, futureDate);
 
-    expect(consumeConfirmation(token, "start_dial", "EX-1", 4)).toEqual({ ok: true });
+    const result = consumeConfirmation(token, "start_dial", "EX-1", 4);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.grant).toBeDefined();
+    }
     expect(consumeConfirmation(token, "start_dial", "EX-1", 4)).toEqual({
       ok: false,
       reason: "already_consumed"

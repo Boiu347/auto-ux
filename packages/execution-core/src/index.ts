@@ -4,6 +4,7 @@ export type { RetryDecision } from "./action-journal.js";
 export { consumeConfirmation, issueConfirmation } from "./confirmation.js";
 export type {
   ConfirmationConsumption,
+  ConfirmationGrant,
   ConfirmationToken
 } from "./confirmation.js";
 

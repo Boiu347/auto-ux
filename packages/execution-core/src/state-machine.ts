@@ -1,19 +1,29 @@
 import {
   ExecutionPhaseSchema,
   ExecutionStatusSchema,
+  type ConfirmationAction,
   type ExecutionPhase,
   type ExecutionStatus
 } from "@app/contracts";
+
+import {
+  invalidateConfirmations,
+  takeConfirmationGrant,
+  type ConfirmationGrant
+} from "./confirmation.js";
 
 export interface TransitionEvent {
   phase: ExecutionPhase;
   status: ExecutionStatus;
   recovered?: boolean;
+  confirmation?: ConfirmationGrant;
 }
 
 export interface ExecutionState {
   status: ExecutionStatus;
   phase: ExecutionPhase;
+  executionId: string;
+  configVersion: number;
 }
 
 type CurrentExecution = ExecutionStatus | ExecutionState;
@@ -33,26 +43,20 @@ const phaseOrder: readonly ExecutionPhase[] = [
   "complete"
 ];
 
-const confirmationPhaseActions: Partial<Record<ExecutionPhase, true>> = {
-  publish_confirm: true,
-  numbers_confirm: true,
-  dial_confirm: true
+const confirmationPhaseActions: Partial<Record<ExecutionPhase, ConfirmationAction>> = {
+  publish_confirm: "publish",
+  numbers_confirm: "import_numbers",
+  dial_confirm: "start_dial"
 };
 
-const verificationConfirmationActions: Partial<Record<ExecutionPhase, string>> = {
+const highRiskPhaseActions: Partial<Record<ExecutionPhase, ConfirmationAction>> = {
+  ...confirmationPhaseActions,
   publish_verify: "publish"
 };
 
-const highRiskPhases = new Set<ExecutionPhase>([
-  "publish_confirm",
-  "publish_verify",
-  "numbers_confirm",
-  "dial_confirm"
-]);
-
 /**
  * Converts a step event into the execution status visible to the control plane.
- * A confirmation phase never advances without a fresh action-specific approval.
+ * High-risk progress accepts only an opaque grant minted by a consumed matching token.
  */
 export function transition(
   current: CurrentExecution,
@@ -60,25 +64,38 @@ export function transition(
 ): ExecutionStatus {
   const phase = ExecutionPhaseSchema.parse(event.phase);
   const nextStatus = ExecutionStatusSchema.parse(event.status);
-  const { status: currentStatus, phase: currentPhase } = normalizeCurrent(current);
+  const normalized = normalizeCurrent(current);
 
-  const requiredConfirmation = verificationConfirmationActions[phase];
   if (
-    requiredConfirmation &&
+    phase === "publish_verify" &&
     !event.recovered &&
-    currentStatus !== "waiting_confirmation"
+    !normalized.phase &&
+    normalized.status !== "waiting_confirmation"
   ) {
-    throw new Error(`${requiredConfirmation} confirmation required`);
+    throw new Error("publish confirmation required");
   }
 
-  assertDocumentedPhaseOrder(currentStatus, currentPhase, phase);
+  const advancing = assertDocumentedPhaseOrder(normalized, phase);
 
-  if (currentStatus === "unknown" || nextStatus === "unknown") {
+  if (normalized.status === "unknown" || nextStatus === "unknown") {
     return "unknown";
   }
 
-  if (event.recovered && highRiskPhases.has(phase)) {
+  const recoveryAction = event.recovered ? highRiskPhaseActions[phase] : undefined;
+  if (recoveryAction) {
+    if (advancing && !hasSafeRecoveryPredecessor(normalized)) {
+      throw new Error(`phase ${normalized.phase} must succeed before advancing`);
+    }
+    invalidateConfirmations(
+      recoveryAction,
+      requireExecutionId(normalized),
+      requireConfigVersion(normalized)
+    );
     return "waiting_confirmation";
+  }
+
+  if (advancing && normalized.phase) {
+    assertAdvanceAllowed(normalized, event.confirmation);
   }
 
   if (phase in confirmationPhaseActions) {
@@ -91,37 +108,102 @@ export function transition(
 function normalizeCurrent(current: CurrentExecution): {
   status: ExecutionStatus;
   phase?: ExecutionPhase;
+  executionId?: string;
+  configVersion?: number;
 } {
   if (typeof current === "string") {
     return { status: ExecutionStatusSchema.parse(current) };
   }
 
+  if (!current.executionId) {
+    throw new Error("executionId is required for an in-progress execution");
+  }
+  if (!Number.isInteger(current.configVersion) || current.configVersion <= 0) {
+    throw new Error("configVersion is required for an in-progress execution");
+  }
+
   return {
     status: ExecutionStatusSchema.parse(current.status),
-    phase: ExecutionPhaseSchema.parse(current.phase)
+    phase: ExecutionPhaseSchema.parse(current.phase),
+    executionId: current.executionId,
+    configVersion: current.configVersion
   };
 }
 
 function assertDocumentedPhaseOrder(
-  currentStatus: ExecutionStatus,
-  currentPhase: ExecutionPhase | undefined,
+  current: ReturnType<typeof normalizeCurrent>,
   nextPhase: ExecutionPhase
-): void {
-  if (!currentPhase) {
-    if (currentStatus !== "pending") {
+): boolean {
+  if (!current.phase) {
+    if (current.status !== "pending") {
       throw new Error("current phase is required after execution start");
     }
     if (nextPhase !== "source_parse") {
       throw new Error(`phase ${nextPhase} must follow source_parse`);
     }
-    return;
+    return true;
   }
 
-  const currentIndex = phaseOrder.indexOf(currentPhase);
+  const currentIndex = phaseOrder.indexOf(current.phase);
   const nextIndex = phaseOrder.indexOf(nextPhase);
-  if (nextPhase === currentPhase || nextIndex === currentIndex + 1) {
+  if (nextPhase === current.phase) {
+    return false;
+  }
+  if (nextIndex === currentIndex + 1) {
+    return true;
+  }
+
+  throw new Error(`phase ${nextPhase} must follow ${current.phase}`);
+}
+
+function hasSafeRecoveryPredecessor(
+  current: ReturnType<typeof normalizeCurrent>
+): boolean {
+  return (
+    current.status === "succeeded" ||
+    (current.status === "waiting_confirmation" &&
+      current.phase !== undefined &&
+      highRiskPhaseActions[current.phase] !== undefined)
+  );
+}
+
+function assertAdvanceAllowed(
+  current: ReturnType<typeof normalizeCurrent>,
+  grant: ConfirmationGrant | undefined
+): void {
+  const action = current.phase && confirmationPhaseActions[current.phase];
+  if (action) {
+    if (
+      current.status === "waiting_confirmation" &&
+      takeConfirmationGrant(
+        grant,
+        action,
+        requireExecutionId(current),
+        requireConfigVersion(current)
+      )
+    ) {
+      return;
+    }
+    throw new Error(`${action} confirmation grant required`);
+  }
+
+  if (current.status === "succeeded") {
     return;
   }
 
-  throw new Error(`phase ${nextPhase} must follow ${currentPhase}`);
+  throw new Error(`phase ${current.phase} must succeed before advancing`);
+}
+
+function requireExecutionId(current: ReturnType<typeof normalizeCurrent>): string {
+  if (!current.executionId) {
+    throw new Error("executionId is required for an in-progress execution");
+  }
+  return current.executionId;
+}
+
+function requireConfigVersion(current: ReturnType<typeof normalizeCurrent>): number {
+  if (!current.configVersion) {
+    throw new Error("configVersion is required for an in-progress execution");
+  }
+  return current.configVersion;
 }
