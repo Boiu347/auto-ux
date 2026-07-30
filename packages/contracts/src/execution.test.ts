@@ -42,6 +42,121 @@ describe("execution contracts", () => {
     expect(ExecutionEventSchema.parse(event).status).toBe("unknown");
   });
 
+  it.each(
+    [
+      "pending",
+      "running",
+      "waiting_confirmation",
+      "succeeded",
+      "failed",
+      "rolled_back",
+      "unknown"
+    ].flatMap((status) =>
+      [
+        "pending",
+        "running",
+        "waiting_confirmation",
+        "succeeded",
+        "failed",
+        "rolled_back",
+        "unknown"
+      ].map((evidenceStatus) => [status, evidenceStatus] as const)
+    )
+  )(
+    "accepts event status %s with checkpoint status %s only when outcomes agree",
+    (status, evidenceStatus) => {
+      const result = ExecutionEventSchema.safeParse({
+        ...event,
+        status,
+        evidence: {
+          kind: "checkpoint",
+          summary: { phase: "call_verify", status: evidenceStatus },
+          reference: {
+            kind: "checkpoint",
+            id: "checkpoint:0123456789abcdef"
+          }
+        }
+      });
+
+      expect(result.success).toBe(status === evidenceStatus);
+    }
+  );
+
+  it("enforces every platform-record outcome and event-status combination", () => {
+    const expectedByOutcome = {
+      unavailable: "unknown",
+      recorded: "succeeded",
+      ringing: "succeeded",
+      connected: "succeeded",
+      no_answer: "succeeded",
+      busy: "succeeded",
+      failed: "failed"
+    } as const;
+    const statuses = [
+      "pending",
+      "running",
+      "waiting_confirmation",
+      "succeeded",
+      "failed",
+      "rolled_back",
+      "unknown"
+    ] as const;
+
+    for (const [outcome, expectedStatus] of Object.entries(expectedByOutcome)) {
+      for (const status of statuses) {
+        expect(
+          ExecutionEventSchema.safeParse({
+            ...event,
+            status,
+            evidence: {
+              kind: "platform_record",
+              summary: { outcome },
+              reference: {
+                kind: "platform_record",
+                id: "record:0123456789abcdef"
+              }
+            }
+          }).success
+        ).toBe(status === expectedStatus);
+      }
+    }
+  });
+
+  it("enforces every field-readback result and event-status combination", () => {
+    const expectedByResult = {
+      matched: "succeeded",
+      mismatched: "failed"
+    } as const;
+    const statuses = [
+      "pending",
+      "running",
+      "waiting_confirmation",
+      "succeeded",
+      "failed",
+      "rolled_back",
+      "unknown"
+    ] as const;
+
+    for (const [result, expectedStatus] of Object.entries(expectedByResult)) {
+      for (const status of statuses) {
+        expect(
+          ExecutionEventSchema.safeParse({
+            ...event,
+            status,
+            evidence: {
+              kind: "field_readback",
+              summary: { field: "publish_state", result },
+              reference: {
+                kind: "field_readback",
+                id: "readback:0123456789abcdef"
+              }
+            }
+          }).success
+        ).toBe(status === expectedStatus);
+      }
+    }
+  });
+
   it("rejects empty audit fields", () => {
     const result = ExecutionEventSchema.safeParse({
       ...event,

@@ -1,5 +1,6 @@
 export { prisma } from "./client";
 export { PrismaExecutionRepository } from "./execution-repository";
+export { InvalidExecutionCursorError } from "./execution-repository";
 export type {
   AppendStepEventResult,
   ConfirmationClaim,

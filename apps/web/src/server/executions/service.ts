@@ -9,6 +9,7 @@ import {
   type ExecutionStatus
 } from "@app/contracts";
 import {
+  InvalidExecutionCursorError,
   PrismaExecutionRepository,
   prisma,
   type AppendStepEventResult,
@@ -150,8 +151,9 @@ export class ExecutionService {
     event: ExecutionEvent,
     confirmation?: ConfirmationProof
   ): Promise<void> {
-    const execution = await this.requireExecution(event.executionId);
-    const phase = phaseForStep(event.stepId);
+    const validatedEvent = ExecutionEventSchema.parse(event);
+    const execution = await this.requireExecution(validatedEvent.executionId);
+    const phase = phaseForStep(validatedEvent.stepId);
     const preparedConfirmation = confirmation
       ? await this.preparePersistedConfirmation(execution, confirmation)
       : undefined;
@@ -166,7 +168,7 @@ export class ExecutionService {
         },
         {
           phase,
-          status: event.status,
+          status: validatedEvent.status,
           confirmation: preparedConfirmation?.grant
         }
       );
@@ -176,7 +178,7 @@ export class ExecutionService {
 
     const result = await this.store.appendEventForAgent({
       agentId,
-      event,
+      event: validatedEvent,
       expectedState: {
         status: execution.status,
         phase: execution.phase
@@ -243,12 +245,16 @@ export class ExecutionService {
     executionId: string,
     cursor?: string
   ): Promise<Response> {
-    if (cursor !== undefined && !/^(0|[1-9]\d*)$/.test(cursor)) {
-      throw new ExecutionServiceError("INVALID_CURSOR", 400);
-    }
-
     await this.requireExecution(executionId);
-    const events = await this.store.listEventsAfter(executionId, cursor);
+    let events: PersistedStepEvent[];
+    try {
+      events = await this.store.listEventsAfter(executionId, cursor);
+    } catch (error) {
+      if (isInvalidCursorError(error)) {
+        throw new ExecutionServiceError("INVALID_CURSOR", 400);
+      }
+      throw error;
+    }
     const encoder = new TextEncoder();
     const store = this.store;
     let lastCursor = events.at(-1)?.cursor ?? cursor;
@@ -481,4 +487,14 @@ const confirmationActionsByPhase: Partial<
 
 function hashToken(token: string): string {
   return `sha256:${createHash("sha256").update(token).digest("hex")}`;
+}
+
+function isInvalidCursorError(error: unknown): boolean {
+  return (
+    error instanceof InvalidExecutionCursorError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "INVALID_CURSOR")
+  );
 }

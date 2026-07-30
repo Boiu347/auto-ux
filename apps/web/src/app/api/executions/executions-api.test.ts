@@ -44,6 +44,27 @@ const secondEvent: ExecutionEvent = {
   occurredAt: "2026-07-30T00:00:01.000Z"
 };
 
+const highRiskTransitions = [
+  {
+    action: "publish" as const,
+    currentPhase: "publish_confirm" as const,
+    stepId: "publish.verify" as const,
+    nextPhase: "publish_verify" as const
+  },
+  {
+    action: "import_numbers" as const,
+    currentPhase: "numbers_confirm" as const,
+    stepId: "dial.confirm" as const,
+    nextPhase: "dial_confirm" as const
+  },
+  {
+    action: "start_dial" as const,
+    currentPhase: "dial_confirm" as const,
+    stepId: "dial.verify" as const,
+    nextPhase: "call_verify" as const
+  }
+];
+
 describe("execution events API", () => {
   it("rejects an event from an agent not holding the lock", async () => {
     const store = new MemoryExecutionStore();
@@ -106,8 +127,8 @@ describe("execution events API", () => {
     const store = new MemoryExecutionStore();
     store.execution = executionRecord();
     store.events = [
-      { cursor: "1", event: firstEvent },
-      { cursor: "2", event: secondEvent }
+      { cursor: "cursor:EX-1:first", event: firstEvent },
+      { cursor: "cursor:EX-1:second", event: secondEvent }
     ];
     const handlers = createEventsHandlers(() => new ExecutionService(store));
 
@@ -122,18 +143,46 @@ describe("execution events API", () => {
       firstEvent.stepId,
       secondEvent.stepId
     ]);
-    expect(initialMessages.map(({ id }) => id)).toEqual(["1", "2"]);
+    expect(initialMessages.map(({ id }) => id)).toEqual([
+      "cursor:EX-1:first",
+      "cursor:EX-1:second"
+    ]);
 
     const resumed = await handlers.GET(
       request("http://localhost/api/executions/EX-1/events", {
-        headers: { "last-event-id": "1" }
+        headers: { "last-event-id": "cursor:EX-1:first" }
       }),
       context("EX-1")
     );
     const resumedMessages = await readFirstSseMessages(resumed, 1);
     expect(resumedMessages).toMatchObject([
-      { id: "2", data: { stepId: secondEvent.stepId } }
+      { id: "cursor:EX-1:second", data: { stepId: secondEvent.stepId } }
     ]);
+  });
+
+  it("rejects an opaque cursor issued for another execution", async () => {
+    const store = new MemoryExecutionStore();
+    store.execution = executionRecord();
+    store.events = [
+      {
+        cursor: "cursor:EX-2:first",
+        event: { ...firstEvent, executionId: "EX-2" }
+      }
+    ];
+    const handlers = createEventsHandlers(resolve(store));
+
+    const response = await handlers.GET(
+      request("http://localhost/api/executions/EX-1/events", {
+        headers: { "last-event-id": "cursor:EX-2:first" }
+      }),
+      context("EX-1")
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ code: "INVALID_CURSOR" });
+    expect(response.headers.get("content-type")).not.toContain(
+      "text/event-stream"
+    );
   });
 
   it("requires development authentication and rejects unknown request fields", async () => {
@@ -282,12 +331,12 @@ describe("execution events API", () => {
       );
       reader = response.body!.getReader();
       const firstRead = reader.read();
-      store.events.push({ cursor: "1", event: firstEvent });
+      store.events.push({ cursor: "cursor:EX-1:first", event: firstEvent });
 
       await vi.advanceTimersByTimeAsync(15_000);
       const firstChunk = await firstRead;
       expect(new TextDecoder().decode(firstChunk.value)).toContain(
-        `id: 1\nevent: execution-step\ndata: ${JSON.stringify(firstEvent)}`
+        `id: cursor:EX-1:first\nevent: execution-step\ndata: ${JSON.stringify(firstEvent)}`
       );
 
       const secondRead = reader.read();
@@ -349,6 +398,94 @@ describe("execution events API", () => {
 
     expect(response.status).toBe(400);
     expect(store.events).toHaveLength(0);
+  });
+
+  it("validates authoritative evidence for direct service callers", async () => {
+    const store = new MemoryExecutionStore();
+    store.execution = executionRecord();
+    store.lockAgentId = "agent-owner";
+    const service = new ExecutionService(store);
+    const contradictoryEvent = {
+      ...firstEvent,
+      stepId: "source.parse",
+      status: "succeeded"
+    } as ExecutionEvent;
+
+    await expect(
+      service.appendEvent("agent-owner", contradictoryEvent)
+    ).rejects.toMatchObject({ name: "ZodError" });
+    expect(store.events).toHaveLength(0);
+    expect(store.execution).toMatchObject({
+      status: "pending",
+      phase: "source_parse"
+    });
+  });
+
+  it("does not let unknown evidence bypass any high-risk confirmation gate", async () => {
+    for (const transitionCase of highRiskTransitions) {
+      const store = new MemoryExecutionStore();
+      store.execution = {
+        ...executionRecord(),
+        status: "waiting_confirmation",
+        phase: transitionCase.currentPhase
+      };
+      store.lockAgentId = "agent-owner";
+      const service = new ExecutionService(store);
+
+      await expect(
+        service.appendEvent(
+          "agent-owner",
+          checkpointEvent(
+            transitionCase.stepId,
+            "unknown",
+            transitionCase.nextPhase
+          )
+        )
+      ).rejects.toMatchObject({ code: "INVALID_EXECUTION_TRANSITION" });
+      expect(store.events).toHaveLength(0);
+      expect(store.execution).toMatchObject({
+        status: "waiting_confirmation",
+        phase: transitionCase.currentPhase
+      });
+    }
+  });
+
+  it("does not consume confirmations for cross-phase running, failed, or unknown evidence", async () => {
+    for (const transitionCase of highRiskTransitions) {
+      for (const status of ["running", "failed", "unknown"] as const) {
+        const store = new MemoryExecutionStore();
+        store.execution = {
+          ...executionRecord(),
+          status: "waiting_confirmation",
+          phase: transitionCase.currentPhase
+        };
+        store.lockAgentId = "agent-owner";
+        const service = new ExecutionService(store);
+        const proof = await service.issueCreatorConfirmation(
+          "EX-1",
+          transitionCase.action,
+          1
+        );
+
+        await expect(
+          service.appendEvent(
+            "agent-owner",
+            checkpointEvent(
+              transitionCase.stepId,
+              status,
+              transitionCase.nextPhase
+            ),
+            proof
+          )
+        ).rejects.toMatchObject({ code: "INVALID_EXECUTION_TRANSITION" });
+        expect(store.events).toHaveLength(0);
+        expect(store.confirmations[0]?.confirmation.consumedAt).toBeNull();
+        expect(store.execution).toMatchObject({
+          status: "waiting_confirmation",
+          phase: transitionCase.currentPhase
+        });
+      }
+    }
   });
 
   it("issues only the separately requested action for the creator and config version", async () => {
@@ -450,11 +587,11 @@ describe("execution events API", () => {
     };
     const publishEvent: ExecutionEvent = {
       ...firstEvent,
-      stepId: "publish.verify",
-      status: "running",
+      stepId: "publish.confirm",
+      status: "succeeded",
       evidence: {
         kind: "checkpoint",
-        summary: { phase: "publish_verify", status: "running" },
+        summary: { phase: "publish_confirm", status: "succeeded" },
         reference: {
           kind: "checkpoint",
           id: "checkpoint:fedcba9876543210"
@@ -549,11 +686,12 @@ describe("execution events API", () => {
           agentId: "agent-owner",
           event: {
             ...firstEvent,
-            stepId: "publish.verify",
+            stepId: "publish.confirm",
+            status: "succeeded",
             nextAction: "stop",
             evidence: {
               kind: "checkpoint",
-              summary: { phase: "publish_verify", status: "running" },
+              summary: { phase: "publish_confirm", status: "succeeded" },
               reference: {
                 kind: "checkpoint",
                 id: "checkpoint:bbbbbbbbbbbbbbbb"
@@ -569,6 +707,26 @@ describe("execution events API", () => {
     expect(store.confirmations[0]?.confirmation.consumedAt).toEqual(
       expect.any(Date)
     );
+
+    const nextPhase = await events.POST(
+      request("http://localhost/api/executions/EX-1/events", {
+        method: "POST",
+        body: JSON.stringify({
+          agentId: "agent-owner",
+          event: checkpointEvent(
+            "publish.verify",
+            "running",
+            "publish_verify"
+          )
+        })
+      }),
+      context("EX-1")
+    );
+    expect(nextPhase.status).toBe(201);
+    expect(store.execution).toMatchObject({
+      status: "running",
+      phase: "publish_verify"
+    });
   });
 
   it("preserves an unknown event as unknown execution state", async () => {
@@ -606,6 +764,27 @@ describe("execution events API", () => {
     expect(store.execution?.status).toBe("unknown");
   });
 });
+
+function checkpointEvent(
+  stepId: ExecutionEvent["stepId"],
+  status: ExecutionStatus,
+  phase: ExecutionPhase
+): ExecutionEvent {
+  return {
+    ...firstEvent,
+    stepId,
+    status,
+    evidence: {
+      kind: "checkpoint",
+      summary: { phase, status },
+      reference: {
+        kind: "checkpoint",
+        id: "checkpoint:9999999999999999"
+      }
+    },
+    nextAction: "stop"
+  };
+}
 
 function executionRecord() {
   return {
@@ -778,7 +957,7 @@ class MemoryExecutionStore implements ExecutionDataStore {
       };
     }
     this.events.push({
-      cursor: String(this.events.length + 1),
+      cursor: `cursor:${input.event.executionId}:${this.events.length + 1}`,
       event: input.event
     });
     this.execution = {
@@ -789,13 +968,23 @@ class MemoryExecutionStore implements ExecutionDataStore {
     return "appended" as const;
   }
 
-  async listEventsAfter(_executionId: string, cursor?: string) {
+  async listEventsAfter(executionId: string, cursor?: string) {
     if (this.failEventListing) {
       throw new Error("persisted event read failed");
     }
-    return this.events.filter((event) =>
-      cursor === undefined ? true : Number(event.cursor) > Number(cursor)
+    const scopedEvents = this.events.filter(
+      ({ event }) => event.executionId === executionId
     );
+    if (cursor === undefined) {
+      return scopedEvents;
+    }
+    const cursorIndex = scopedEvents.findIndex((event) => event.cursor === cursor);
+    if (cursorIndex === -1) {
+      throw Object.assign(new Error("invalid execution event cursor"), {
+        code: "INVALID_CURSOR"
+      });
+    }
+    return scopedEvents.slice(cursorIndex + 1);
   }
 
   async createConfirmation(input: {
@@ -822,35 +1011,6 @@ class MemoryExecutionStore implements ExecutionDataStore {
     };
     this.confirmations.push({ confirmation, tokenHash: input.tokenHash });
     return confirmation;
-  }
-
-  async consumeConfirmation(input: {
-    confirmationId: string;
-    executionId: string;
-    action: ConfirmationAction;
-    configVersion: number;
-    tokenHash: string;
-  }): Promise<ConfirmationRecord | null> {
-    const persisted = this.confirmations.find(
-      (record) =>
-        record.confirmation.id === input.confirmationId &&
-        record.confirmation.executionId === input.executionId &&
-        record.confirmation.userId === this.activeScope.userId &&
-        record.confirmation.workspaceId === this.activeScope.workspaceId &&
-        record.confirmation.action === input.action &&
-        record.confirmation.configVersion === input.configVersion &&
-        record.tokenHash === input.tokenHash &&
-        record.confirmation.consumedAt === null &&
-        record.confirmation.expiresAt.getTime() > Date.now()
-    );
-    if (!persisted) {
-      return null;
-    }
-    persisted.confirmation = {
-      ...persisted.confirmation,
-      consumedAt: new Date()
-    };
-    return persisted.confirmation;
   }
 
   async findConfirmation(input: {

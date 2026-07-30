@@ -206,7 +206,38 @@ export const ExecutionEventSchema = z
     errorCode: ErrorCodeSchema.optional(),
     nextAction: NextActionSchema
   })
-  .strict();
+  .strict()
+  .superRefine((event, context) => {
+    const evidenceStatus = authoritativeEvidenceStatus(event.evidence);
+    if (evidenceStatus !== undefined && evidenceStatus !== event.status) {
+      context.addIssue({
+        code: "custom",
+        path: ["evidence", "summary"],
+        message: "evidence outcome must match event status"
+      });
+    }
+  });
+
+function authoritativeEvidenceStatus(
+  evidence: z.infer<typeof ExecutionEvidenceSchema>
+): z.infer<typeof ExecutionStatusSchema> | undefined {
+  if (evidence.kind === "checkpoint") {
+    return evidence.summary.status;
+  }
+  if (evidence.kind === "field_readback") {
+    return evidence.summary.result === "matched" ? "succeeded" : "failed";
+  }
+  if (evidence.kind === "platform_record") {
+    if (evidence.summary.outcome === "unavailable") {
+      return "unknown";
+    }
+    if (evidence.summary.outcome === "failed") {
+      return "failed";
+    }
+    return "succeeded";
+  }
+  return undefined;
+}
 
 export type ExecutionStatus = z.infer<typeof ExecutionStatusSchema>;
 export type ExecutionPhase = z.infer<typeof ExecutionPhaseSchema>;

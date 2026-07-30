@@ -32,6 +32,14 @@ export interface PersistedStepEvent {
   event: ExecutionEvent;
 }
 
+export class InvalidExecutionCursorError extends Error {
+  readonly code = "INVALID_CURSOR";
+
+  constructor() {
+    super("cursor does not belong to this execution scope");
+  }
+}
+
 export interface ConfirmationRecord {
   id: string;
   executionId: string;
@@ -93,13 +101,6 @@ export interface ExecutionRepository {
     tokenHash: string;
     expiresAt: Date;
   }): Promise<ConfirmationRecord>;
-  consumeConfirmation(input: {
-    confirmationId: string;
-    executionId: string;
-    action: ConfirmationAction;
-    configVersion: number;
-    tokenHash: string;
-  }): Promise<ConfirmationRecord | null>;
   findConfirmation(input: ConfirmationClaim): Promise<ConfirmationRecord | null>;
 }
 
@@ -227,6 +228,9 @@ export class PrismaExecutionRepository implements ExecutionRepository {
         return "state_mismatch";
       }
       if (input.confirmation) {
+        if (input.confirmation.executionId !== event.executionId) {
+          return "confirmation_invalid";
+        }
         const action = ConfirmationActionSchema.parse(input.confirmation.action);
         const confirmations = await transaction.$queryRaw<
           ConfirmationDatabaseRow[]
@@ -292,7 +296,24 @@ export class PrismaExecutionRepository implements ExecutionRepository {
     afterCursor?: string
   ): Promise<PersistedStepEvent[]> {
     await this.requireExecution(executionId);
-    const sequence = this.parseCursor(afterCursor);
+    let sequence: bigint | undefined;
+    if (afterCursor !== undefined) {
+      const cursorEvent = await this.client.executionStep.findFirst({
+        where: {
+          id: afterCursor,
+          executionId,
+          execution: {
+            userId: this.scope.userId,
+            workspaceId: this.scope.workspaceId
+          }
+        },
+        select: { sequence: true }
+      });
+      if (!cursorEvent) {
+        throw new InvalidExecutionCursorError();
+      }
+      sequence = cursorEvent.sequence;
+    }
     const events = await this.client.executionStep.findMany({
       where: {
         executionId,
@@ -306,7 +327,7 @@ export class PrismaExecutionRepository implements ExecutionRepository {
     });
 
     return events.map((event) => ({
-      cursor: event.sequence.toString(),
+      cursor: event.id,
       event: this.toExecutionEvent(event)
     }));
   }
@@ -384,34 +405,6 @@ export class PrismaExecutionRepository implements ExecutionRepository {
     });
 
     return this.toConfirmationRecord(confirmation);
-  }
-
-  async consumeConfirmation(input: {
-    confirmationId: string;
-    executionId: string;
-    action: ConfirmationAction;
-    configVersion: number;
-    tokenHash: string;
-  }): Promise<ConfirmationRecord | null> {
-    const action = ConfirmationActionSchema.parse(input.action);
-    const confirmations = await this.client.$queryRaw<ConfirmationDatabaseRow[]>`
-      UPDATE "Confirmation"
-      SET "consumedAt" = CURRENT_TIMESTAMP
-      WHERE "id" = ${input.confirmationId}
-        AND "executionId" = ${input.executionId}
-        AND "userId" = ${this.scope.userId}
-        AND "workspaceId" = ${this.scope.workspaceId}
-        AND "action" = ${action}::"ConfirmationAction"
-        AND "configVersion" = ${input.configVersion}
-        AND "tokenHash" = ${input.tokenHash}
-        AND "consumedAt" IS NULL
-        AND "expiresAt" > CURRENT_TIMESTAMP
-      RETURNING "id", "executionId", "userId", "workspaceId", "action",
-                "configVersion", "expiresAt", "consumedAt", "createdAt"`;
-
-    return confirmations[0]
-      ? this.toConfirmationRecord(confirmations[0])
-      : null;
   }
 
   async findConfirmation(
@@ -518,16 +511,6 @@ export class PrismaExecutionRepository implements ExecutionRepository {
       consumedAt: confirmation.consumedAt,
       createdAt: confirmation.createdAt
     };
-  }
-
-  private parseCursor(cursor: string | undefined): bigint | undefined {
-    if (cursor === undefined) {
-      return undefined;
-    }
-    if (!/^(0|[1-9]\d*)$/.test(cursor)) {
-      throw new Error("cursor must be a non-negative integer");
-    }
-    return BigInt(cursor);
   }
 
   private toCreateOnlyPolicy(targetPolicy: string): "create_only" {

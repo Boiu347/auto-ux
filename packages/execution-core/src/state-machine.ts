@@ -77,10 +77,6 @@ export function transition(
 
   const advancing = assertDocumentedPhaseOrder(normalized, phase);
 
-  if (normalized.status === "unknown" || nextStatus === "unknown") {
-    return "unknown";
-  }
-
   const recoveryAction =
     event.recovered && !advancing ? highRiskPhaseActions[phase] : undefined;
   if (recoveryAction) {
@@ -101,11 +97,17 @@ export function transition(
   }
 
   if (advancing && normalized.phase) {
-    assertAdvanceAllowed(normalized, event.confirmation);
+    assertAdvanceAllowed(normalized);
+    if (phase in confirmationPhaseActions) {
+      if (nextStatus !== "running" && nextStatus !== "waiting_confirmation") {
+        throw new Error(`phase ${phase} confirmation gate cannot start as ${nextStatus}`);
+      }
+      return "waiting_confirmation";
+    }
   }
 
-  if (phase in confirmationPhaseActions) {
-    return "waiting_confirmation";
+  if (normalized.status === "unknown" || nextStatus === "unknown") {
+    return "unknown";
   }
 
   return nextStatus;
@@ -163,22 +165,10 @@ function assertDocumentedPhaseOrder(
 }
 
 function assertAdvanceAllowed(
-  current: ReturnType<typeof normalizeCurrent>,
-  grant: ConfirmationGrant | undefined
+  current: ReturnType<typeof normalizeCurrent>
 ): void {
   const action = current.phase && confirmationPhaseActions[current.phase];
-  if (action) {
-    if (
-      current.status === "waiting_confirmation" &&
-      takeConfirmationGrant(
-        grant,
-        action,
-        requireExecutionId(current),
-        requireConfigVersion(current)
-      )
-    ) {
-      return;
-    }
+  if (action && current.status === "waiting_confirmation") {
     throw new Error(`${action} confirmation grant required`);
   }
 

@@ -124,9 +124,15 @@ describe("transition", () => {
     ).toBe("waiting_confirmation");
     expect(
       transition(state("numbers_confirm", "waiting_confirmation"), {
-        phase: "dial_confirm",
-        status: "running",
+        phase: "numbers_confirm",
+        status: "succeeded",
         confirmation: consumeGrant("import_numbers")
+      })
+    ).toBe("succeeded");
+    expect(
+      transition(state("numbers_confirm", "succeeded"), {
+        phase: "dial_confirm",
+        status: "running"
       })
     ).toBe("waiting_confirmation");
   });
@@ -136,46 +142,65 @@ describe("transition", () => {
     ["numbers_confirm", "dial_confirm", "import_numbers"],
     ["dial_confirm", "call_verify", "start_dial"]
   ] as const)(
-    "requires a matching consumed %s grant before %s",
+    "rejects unconfirmed %s → %s outcomes including unknown",
     (phase, nextPhase, action) => {
-      expect(() =>
-        transition(state(phase, "waiting_confirmation"), {
-          phase: nextPhase,
-          status: "running"
-        })
-      ).toThrowError(`${action} confirmation grant required`);
-
-      expect(
-        transition(state(phase, "waiting_confirmation"), {
-          phase: nextPhase,
-          status: "running",
-          confirmation: consumeGrant(action)
-        })
-      ).toBe(nextPhase === "dial_confirm" ? "waiting_confirmation" : "running");
+      for (const status of ["running", "failed", "unknown"] as const) {
+        expect(() =>
+          transition(state(phase, "waiting_confirmation"), {
+            phase: nextPhase,
+            status
+          })
+        ).toThrow(`${action} confirmation grant required`);
+      }
     }
   );
 
   it.each([
-    ["publish_confirm", "publish_verify", "publish"],
-    ["numbers_confirm", "dial_confirm", "import_numbers"],
-    ["dial_confirm", "call_verify", "start_dial"]
+    ["publish_confirm", "publish_verify", "publish", "running"],
+    ["numbers_confirm", "dial_confirm", "import_numbers", "waiting_confirmation"],
+    ["dial_confirm", "call_verify", "start_dial", "running"]
   ] as const)(
-    "does not treat a succeeded %s state as a confirmation grant",
-    (phase, nextPhase, action) => {
-      expect(() =>
+    "requires %s to succeed in-phase before advancing to %s",
+    (phase, nextPhase, action, expected) => {
+      expect(
+        transition(state(phase, "waiting_confirmation"), {
+          phase,
+          status: "succeeded",
+          confirmation: consumeGrant(action)
+        })
+      ).toBe("succeeded");
+      expect(
         transition(state(phase, "succeeded"), {
           phase: nextPhase,
           status: "running"
         })
-      ).toThrowError(`${action} confirmation grant required`);
+      ).toBe(expected);
+    }
+  );
+
+  it.each([
+    ["voice_preflight", "publish_confirm"],
+    ["publish_verify", "numbers_confirm"],
+    ["numbers_confirm", "dial_confirm"]
+  ] as const)(
+    "does not expose the %s gate for a failed or unknown operation from %s",
+    (phase, nextPhase) => {
+      for (const status of ["failed", "unknown"] as const) {
+        expect(() =>
+          transition(state(phase, "succeeded"), {
+            phase: nextPhase,
+            status
+          })
+        ).toThrow();
+      }
     }
   );
 
   it("rejects an object fabricated as a confirmation grant", () => {
     expect(() =>
       transition(state("publish_confirm", "waiting_confirmation"), {
-        phase: "publish_verify",
-        status: "running",
+        phase: "publish_confirm",
+        status: "succeeded",
         confirmation: {} as ConfirmationGrant
       })
     ).toThrowError("publish confirmation grant required");
@@ -189,8 +214,8 @@ describe("transition", () => {
     ]) {
       expect(() =>
         transition(state("publish_confirm", "waiting_confirmation"), {
-          phase: "publish_verify",
-          status: "running",
+          phase: "publish_confirm",
+          status: "succeeded",
           confirmation: grant
         })
       ).toThrowError("publish confirmation grant required");
@@ -207,23 +232,23 @@ describe("transition", () => {
     expect(expired).toEqual({ ok: false, reason: "expired" });
     expect(() =>
       transition(state("publish_confirm", "waiting_confirmation"), {
-        phase: "publish_verify",
-        status: "running"
+        phase: "publish_confirm",
+        status: "succeeded"
       })
     ).toThrowError("publish confirmation grant required");
 
     const grant = consumeGrant("publish");
     expect(
       transition(state("publish_confirm", "waiting_confirmation"), {
-        phase: "publish_verify",
-        status: "running",
+        phase: "publish_confirm",
+        status: "succeeded",
         confirmation: grant
       })
-    ).toBe("running");
+    ).toBe("succeeded");
     expect(() =>
       transition(state("publish_confirm", "waiting_confirmation"), {
-        phase: "publish_verify",
-        status: "running",
+        phase: "publish_confirm",
+        status: "succeeded",
         confirmation: grant
       })
     ).toThrowError("publish confirmation grant required");
@@ -242,15 +267,15 @@ describe("transition", () => {
 
       expect(() =>
         transition(state("publish_confirm", "waiting_confirmation"), {
-          phase: "publish_verify",
-          status: "running",
+          phase: "publish_confirm",
+          status: "succeeded",
           confirmation: grant
         })
       ).toThrowError("publish confirmation grant required");
       expect(() =>
         transition(state("publish_confirm", "waiting_confirmation"), {
-          phase: "publish_verify",
-          status: "running",
+          phase: "publish_confirm",
+          status: "succeeded",
           confirmation: grant
         })
       ).toThrowError("publish confirmation grant required");
@@ -319,33 +344,6 @@ describe("transition", () => {
     ).toThrowError("publish confirmation grant required");
   });
 
-  it.each([
-    ["publish_confirm", "publish_verify", "publish", "running"],
-    ["publish_verify", "numbers_confirm", undefined, "waiting_confirmation"],
-    ["numbers_confirm", "dial_confirm", "import_numbers", "waiting_confirmation"],
-    ["dial_confirm", "call_verify", "start_dial", "running"]
-  ] as const)(
-    "applies normal predecessor validation to recovered %s → %s",
-    (phase, nextPhase, action, expected) => {
-      const event = {
-        phase: nextPhase,
-        status: "running" as const,
-        recovered: true,
-        ...(action ? { confirmation: consumeGrant(action) } : {})
-      };
-
-      expect(
-        transition(
-          state(phase, action ? "waiting_confirmation" : "succeeded"),
-          event
-        )
-      ).toBe(expected);
-      expect(() =>
-        transition(state(phase, "failed"), event)
-      ).toThrow();
-    }
-  );
-
   it("requires a new publish grant to resume recovered publish verification", () => {
     const oldGrant = consumeGrant("publish");
     expect(
@@ -407,66 +405,12 @@ describe("transition", () => {
     }
   );
 
-  it.each([
-    ["publish_confirm", "publish_verify", "publish", "running"],
-    ["numbers_confirm", "dial_confirm", "import_numbers", "waiting_confirmation"],
-    ["dial_confirm", "call_verify", "start_dial", "running"]
-  ] as const)(
-    "uses the same cross-phase truth table after %s recovery",
-    (phase, nextPhase, action, expected) => {
-      const oldGrant = consumeGrant(action);
-      transition(state(phase, "waiting_confirmation"), {
-        phase,
-        status: "running",
-        recovered: true
-      });
-
-      for (const recovered of [false, true]) {
-        for (const status of [
-          "pending",
-          "running",
-          "failed",
-          "succeeded",
-          "waiting_confirmation"
-        ] as const) {
-          const event = {
-            phase: nextPhase,
-            status: "running" as const,
-            recovered,
-            confirmation: consumeGrant(action)
-          };
-          if (status === "waiting_confirmation") {
-            expect(transition(state(phase, status), event)).toBe(expected);
-          } else {
-            expect(() => transition(state(phase, status), event)).toThrow();
-          }
-        }
-
-        expect(() =>
-          transition(state(phase, "waiting_confirmation"), {
-            phase: nextPhase,
-            status: "running",
-            recovered,
-            confirmation: oldGrant
-          })
-        ).toThrowError(`${action} confirmation grant required`);
-        expect(() =>
-          transition(state(phase, "waiting_confirmation"), {
-            phase: nextPhase,
-            status: "running",
-            recovered
-          })
-        ).toThrowError(`${action} confirmation grant required`);
-      }
-    }
-  );
-
-  it("never promotes an unknown result to success", () => {
-    expect(
+  it("does not advance an unknown predecessor to complete", () => {
+    expect(() =>
       transition(
         state("call_verify", "unknown"),
         { phase: "complete", status: "succeeded" }
       )
-    ).toBe("unknown");
+    ).toThrow("phase call_verify must succeed before advancing");
   });
 });
