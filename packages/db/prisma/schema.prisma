@@ -7,6 +7,43 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum ExecutionStatus {
+  pending
+  running
+  waiting_confirmation
+  succeeded
+  failed
+  rolled_back
+  unknown
+}
+enum ExecutionPhase {
+  source_parse
+  draft_confirm
+  environment_preflight
+  robot_create
+  field_configure
+  voice_preflight
+  publish_confirm
+  publish_verify
+  numbers_confirm
+  dial_confirm
+  call_verify
+  complete
+}
+enum TargetPolicy {
+  create_only
+}
+enum OperationStatus {
+  running
+  succeeded
+  failed
+}
+enum ConfirmationAction {
+  publish
+  import_numbers
+  start_dial
+}
+
 model User {
   id            String        @id
   createdAt     DateTime      @default(now())
@@ -61,9 +98,9 @@ model Execution {
   userId                 String
   workspaceId            String
   configVersion          Int
-  status                 String
-  phase                  String
-  targetPolicy           String
+  status                 ExecutionStatus
+  phase                  ExecutionPhase
+  targetPolicy           TargetPolicy
   executionLockAgentId   String?
   executionLockExpiresAt DateTime?
   createdAt              DateTime             @default(now())
@@ -77,6 +114,7 @@ model Execution {
   auditEvents            AuditEvent[]
 
   @@unique([id, userId, workspaceId])
+  @@unique([id, workspaceId])
   @@index([userId, workspaceId, createdAt])
   @@index([executionLockExpiresAt])
 }
@@ -102,12 +140,13 @@ model ExecutionOperation {
   id          String    @id @default(cuid())
   executionId String
   fingerprint String
-  status      String
+  attempt     Int
+  status      OperationStatus
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   execution   Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
 
-  @@unique([executionId, fingerprint])
+  @@unique([executionId, fingerprint, attempt])
 }
 
 model Confirmation {
@@ -115,7 +154,7 @@ model Confirmation {
   executionId    String
   userId         String
   workspaceId    String
-  action         String
+  action         ConfirmationAction
   configVersion  Int
   tokenHash      String
   expiresAt      DateTime
@@ -127,6 +166,14 @@ model Confirmation {
 
   @@index([executionId, expiresAt])
   @@index([userId, workspaceId])
+}
+
+model WorkspaceMember {
+  userId      String
+  workspaceId String
+  createdAt   DateTime @default(now())
+
+  @@id([userId, workspaceId])
 }
 
 model RobotBinding {

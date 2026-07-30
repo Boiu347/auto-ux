@@ -39,6 +39,8 @@ export interface ExecutionRepository {
   appendStepEvent(event: ExecutionEvent): Promise<void>;
   listStepEvents(executionId: string): Promise<ExecutionEvent[]>;
   acquireLock(executionId: string, agentId: string, ttlSeconds: number): Promise<boolean>;
+  claimOperation(executionId: string, fingerprint: string): Promise<{ claimed: boolean; attempt?: number }>;
+  completeOperation(executionId: string, fingerprint: string, attempt: number, status: "succeeded" | "failed"): Promise<void>;
 }
 
 export class PrismaExecutionRepository implements ExecutionRepository {
@@ -63,6 +65,11 @@ export class PrismaExecutionRepository implements ExecutionRepository {
       await transaction.workspace.upsert({
         where: { id: input.workspaceId },
         create: { id: input.workspaceId },
+        update: {}
+      });
+      await transaction.workspaceMember.upsert({
+        where: { userId_workspaceId: { userId: input.userId, workspaceId: input.workspaceId } },
+        create: { userId: input.userId, workspaceId: input.workspaceId },
         update: {}
       });
 
@@ -162,26 +169,44 @@ export class PrismaExecutionRepository implements ExecutionRepository {
       throw new Error("ttlSeconds must be a positive integer");
     }
 
-    const now = new Date();
-    const expiresAt = new Date(now.getTime() + ttlSeconds * 1_000);
-    const result = await this.client.execution.updateMany({
-      where: {
-        id: executionId,
-        userId: this.scope.userId,
-        workspaceId: this.scope.workspaceId,
-        OR: [
-          { executionLockExpiresAt: null },
-          { executionLockExpiresAt: { lte: now } },
-          { executionLockAgentId: agentId }
-        ]
-      },
-      data: {
-        executionLockAgentId: agentId,
-        executionLockExpiresAt: expiresAt
-      }
-    });
+    const rows = await this.client.$queryRaw<{ id: string }[]>`
+      UPDATE "Execution"
+      SET "executionLockAgentId" = ${agentId},
+          "executionLockExpiresAt" = CURRENT_TIMESTAMP + (${ttlSeconds} * INTERVAL '1 second')
+      WHERE "id" = ${executionId}
+        AND "userId" = ${this.scope.userId}
+        AND "workspaceId" = ${this.scope.workspaceId}
+        AND ("executionLockExpiresAt" IS NULL OR "executionLockExpiresAt" <= CURRENT_TIMESTAMP OR "executionLockAgentId" = ${agentId})
+      RETURNING "id"`;
+    return rows.length === 1;
+  }
 
-    return result.count === 1;
+  async claimOperation(executionId: string, fingerprint: string): Promise<{ claimed: boolean; attempt?: number }> {
+    await this.requireExecution(executionId);
+    try {
+      const operation = await this.client.$transaction(async (transaction) => {
+        const latest = await transaction.executionOperation.aggregate({
+          where: { executionId, fingerprint },
+          _max: { attempt: true }
+        });
+        return transaction.executionOperation.create({
+          data: { executionId, fingerprint, attempt: (latest._max.attempt ?? 0) + 1, status: "running" }
+        });
+      });
+      return { claimed: true, attempt: operation.attempt };
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002") {
+        return { claimed: false };
+      }
+      throw error;
+    }
+  }
+
+  async completeOperation(executionId: string, fingerprint: string, attempt: number, status: "succeeded" | "failed"): Promise<void> {
+    await this.client.executionOperation.updateMany({
+      where: { executionId, fingerprint, attempt, status: "running", execution: { userId: this.scope.userId, workspaceId: this.scope.workspaceId } },
+      data: { status }
+    });
   }
 
   private async requireExecution(executionId: string): Promise<void> {

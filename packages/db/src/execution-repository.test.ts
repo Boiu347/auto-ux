@@ -35,6 +35,7 @@ describe("PrismaExecutionRepository", () => {
     await prisma.execution.deleteMany();
     await prisma.configDraft.deleteMany();
     await prisma.localAgent.deleteMany();
+    await prisma.workspaceMember.deleteMany();
     await prisma.workspace.deleteMany();
     await prisma.user.deleteMany();
   });
@@ -94,5 +95,189 @@ describe("PrismaExecutionRepository", () => {
 
     await expect(repository.acquireLock(execution.id, "agent-1", 60)).resolves.toBe(true);
     await expect(repository.acquireLock(execution.id, "agent-2", 60)).resolves.toBe(false);
+  });
+
+  it("allows exactly one winner under concurrent lock contention", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+
+    const results = await Promise.all(
+      Array.from({ length: 24 }, (_, index) =>
+        repository.acquireLock(execution.id, `agent-${index}`, 60)
+      )
+    );
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
+  it("does not claim a running or succeeded operation twice", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+
+    const firstClaim = await repository.claimOperation(execution.id, "fingerprint-1");
+    await expect(repository.claimOperation(execution.id, "fingerprint-1")).resolves.toEqual({
+      claimed: false
+    });
+    await repository.completeOperation(execution.id, "fingerprint-1", firstClaim.attempt!, "succeeded");
+    await expect(repository.claimOperation(execution.id, "fingerprint-1")).resolves.toEqual({
+      claimed: false
+    });
+  });
+
+  it("allows a failed operation to be claimed as a new attempt", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+
+    const firstClaim = await repository.claimOperation(execution.id, "fingerprint-1");
+    await repository.completeOperation(execution.id, "fingerprint-1", firstClaim.attempt!, "failed");
+
+    await expect(repository.claimOperation(execution.id, "fingerprint-1")).resolves.toEqual({
+      claimed: true,
+      attempt: 2
+    });
+  });
+
+  it("allows the same operation fingerprint in a different execution", async () => {
+    const firstExecution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+    const secondExecution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 2
+    });
+
+    await expect(repository.claimOperation(firstExecution.id, "fingerprint-1")).resolves.toEqual({
+      claimed: true,
+      attempt: 1
+    });
+    await expect(repository.claimOperation(secondExecution.id, "fingerprint-1")).resolves.toEqual({
+      claimed: true,
+      attempt: 1
+    });
+  });
+
+  it("rejects tenant-inconsistent execution relations in PostgreSQL", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+    await prisma.user.create({ data: { id: "U-2" } });
+    await prisma.workspace.create({ data: { id: "W-2" } });
+    await prisma.workspaceMember.create({
+      data: { userId: "U-2", workspaceId: "W-2" }
+    });
+    await prisma.localAgent.create({
+      data: {
+        id: "agent-W-2",
+        workspaceId: "W-2",
+        version: "1.0.0",
+        capabilities: {}
+      }
+    });
+
+    await expect(
+      prisma.execution.create({
+        data: {
+          id: "execution_cross_tenant",
+          userId: "U-2",
+          workspaceId: "W-1",
+          configVersion: 1,
+          status: "pending",
+          phase: "source_parse",
+          targetPolicy: "create_only"
+        }
+      })
+    ).rejects.toThrow();
+    await expect(
+      prisma.confirmation.create({
+        data: {
+          id: "confirmation_cross_tenant",
+          executionId: execution.id,
+          userId: "U-2",
+          workspaceId: "W-1",
+          action: "publish",
+          configVersion: 1,
+          tokenHash: "sha256:abcdef",
+          expiresAt: new Date("2026-07-30T01:00:00.000Z")
+        }
+      })
+    ).rejects.toThrow();
+    await expect(
+      prisma.robotBinding.create({
+        data: {
+          workspaceId: "W-1",
+          executionId: execution.id,
+          agentId: "agent-W-2",
+          platformRobotRef: "robot:0123456789abcdef",
+          displayName: "robot"
+        }
+      })
+    ).rejects.toThrow();
+    await expect(
+      prisma.auditEvent.create({
+        data: {
+          workspaceId: "W-1",
+          actorUserId: "U-2",
+          executionId: execution.id,
+          action: "execution.inspect",
+          facts: {}
+        }
+      })
+    ).rejects.toThrow();
+  });
+
+  it("rejects invalid durable policy values through the raw client", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+    const claim = await repository.claimOperation(execution.id, "fingerprint-1");
+
+    await expect(
+      prisma.$executeRaw`UPDATE "Execution" SET "targetPolicy" = ${"mutate_existing"} WHERE "id" = ${execution.id}`
+    ).rejects.toThrow();
+    await expect(
+      prisma.$executeRaw`UPDATE "Execution" SET "status" = ${"not_a_status"} WHERE "id" = ${execution.id}`
+    ).rejects.toThrow();
+    await expect(
+      prisma.$executeRaw`UPDATE "Execution" SET "phase" = ${"not_a_phase"} WHERE "id" = ${execution.id}`
+    ).rejects.toThrow();
+    await expect(
+      prisma.$executeRaw`UPDATE "ExecutionOperation" SET "status" = ${"not_an_operation_status"} WHERE "executionId" = ${execution.id} AND "attempt" = ${claim.attempt!}`
+    ).rejects.toThrow();
+  });
+
+  it("rejects raw phone and source fields at the repository boundary", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+
+    await expect(
+      repository.appendStepEvent({
+        ...event,
+        executionId: execution.id,
+        evidence: {
+          ...event.evidence,
+          rawPhone: "13800138000",
+          rawSource: "untrusted upload"
+        }
+      } as unknown as ExecutionEvent)
+    ).rejects.toThrow();
   });
 });
