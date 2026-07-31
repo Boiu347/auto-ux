@@ -393,6 +393,61 @@ describe("PrismaExecutionRepository", () => {
     });
   });
 
+  it("rejects a third operation attempt after two failed attempts", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+
+    const firstClaim = await repository.claimOperation(execution.id, "fingerprint-1");
+    await repository.completeOperation(execution.id, "fingerprint-1", firstClaim.attempt!, "failed");
+    const secondClaim = await repository.claimOperation(execution.id, "fingerprint-1");
+    await repository.completeOperation(execution.id, "fingerprint-1", secondClaim.attempt!, "failed");
+
+    await expect(repository.claimOperation(execution.id, "fingerprint-1")).resolves.toEqual({
+      claimed: false
+    });
+    await expect(
+      prisma.executionOperation.count({
+        where: { executionId: execution.id, fingerprint: "fingerprint-1" }
+      })
+    ).resolves.toBe(2);
+  });
+
+  it("allows only one concurrent retry and never exceeds two failed attempts", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+
+    const firstClaim = await repository.claimOperation(execution.id, "fingerprint-1");
+    await repository.completeOperation(execution.id, "fingerprint-1", firstClaim.attempt!, "failed");
+
+    const retryClaims = await Promise.all(
+      Array.from({ length: 24 }, () =>
+        repository.claimOperation(execution.id, "fingerprint-1")
+      )
+    );
+    expect(retryClaims.filter((claim) => claim.claimed)).toEqual([
+      { claimed: true, attempt: 2 }
+    ]);
+
+    await repository.completeOperation(execution.id, "fingerprint-1", 2, "failed");
+    const exhaustedClaims = await Promise.all(
+      Array.from({ length: 24 }, () =>
+        repository.claimOperation(execution.id, "fingerprint-1")
+      )
+    );
+    expect(exhaustedClaims.every((claim) => !claim.claimed)).toBe(true);
+    await expect(
+      prisma.executionOperation.count({
+        where: { executionId: execution.id, fingerprint: "fingerprint-1" }
+      })
+    ).resolves.toBe(2);
+  });
+
   it("allows the same operation fingerprint in a different execution", async () => {
     const firstExecution = await repository.create({
       userId: "U-1",

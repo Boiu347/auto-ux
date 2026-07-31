@@ -29,6 +29,8 @@ export interface RepositoryScope {
   workspaceId: string;
 }
 
+const MAX_OPERATION_ATTEMPTS = 2;
+
 export interface PersistedStepEvent {
   cursor: string;
   event: ExecutionEvent;
@@ -524,18 +526,36 @@ export class PrismaExecutionRepository implements ExecutionRepository {
   }
 
   async claimOperation(executionId: string, fingerprint: string): Promise<{ claimed: boolean; attempt?: number }> {
-    await this.requireExecution(executionId);
     try {
-      const operation = await this.client.$transaction(async (transaction) => {
-        const latest = await transaction.executionOperation.aggregate({
+      return await this.client.$transaction(async (transaction) => {
+        const executions = await transaction.$queryRaw<Array<{ id: string }>>`
+          SELECT "id"
+          FROM "Execution"
+          WHERE "id" = ${executionId}
+            AND "userId" = ${this.scope.userId}
+            AND "workspaceId" = ${this.scope.workspaceId}
+          FOR UPDATE`;
+        if (executions.length !== 1) {
+          throw new Error("execution not found in repository scope");
+        }
+
+        const latest = await transaction.executionOperation.findFirst({
           where: { executionId, fingerprint },
-          _max: { attempt: true }
+          orderBy: { attempt: "desc" },
+          select: { attempt: true, status: true }
         });
-        return transaction.executionOperation.create({
-          data: { executionId, fingerprint, attempt: (latest._max.attempt ?? 0) + 1, status: "running" }
+        if (
+          latest &&
+          (latest.status !== "failed" || latest.attempt >= MAX_OPERATION_ATTEMPTS)
+        ) {
+          return { claimed: false };
+        }
+
+        const operation = await transaction.executionOperation.create({
+          data: { executionId, fingerprint, attempt: (latest?.attempt ?? 0) + 1, status: "running" }
         });
+        return { claimed: true, attempt: operation.attempt };
       });
-      return { claimed: true, attempt: operation.attempt };
     } catch (error) {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "P2002") {
         return { claimed: false };
