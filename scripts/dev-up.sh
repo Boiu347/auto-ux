@@ -11,26 +11,29 @@ DEV_WORKSPACE_ID=${DEV_WORKSPACE_ID:-"W-1"}
 PORT=${PORT:-3100}
 BASE_URL="http://127.0.0.1:$PORT"
 WEB_PID=""
+OWNER_FILE="$RUNTIME_DIR/web.owner"
+OWNED_WRAPPER="$PROJECT_ROOT/scripts/owned-process.sh"
+PROCESS_OWNER="$PROJECT_ROOT/scripts/process-owner.sh"
 
 mkdir -p "$RUNTIME_DIR"
 
-if [ -f "$RUNTIME_DIR/web.pid" ]; then
-  OLD_PID=$(sed -n '1p' "$RUNTIME_DIR/web.pid")
-  case "$OLD_PID" in
-    ''|*[!0-9]*) ;;
-    *)
-      if kill -0 "$OLD_PID" 2>/dev/null; then
-        echo "auto UX is already running (pid $OLD_PID). Run pnpm dev:down first." >&2
-        exit 1
-      fi
-      ;;
-  esac
+if [ -f "$OWNER_FILE" ]; then
+  if "$PROCESS_OWNER" verify "$OWNER_FILE" "$OWNED_WRAPPER"; then
+    echo "auto UX is already running. Run pnpm dev:down first." >&2
+    exit 1
+  else
+    OWNER_STATUS=$?
+    if [ "$OWNER_STATUS" -eq 2 ]; then
+      echo "Refusing startup because existing PID metadata cannot be verified." >&2
+      exit 1
+    fi
+  fi
 fi
 
 cleanup() {
-  if [ -n "$WEB_PID" ] && kill -0 "$WEB_PID" 2>/dev/null; then
-    kill "$WEB_PID" 2>/dev/null || true
-    wait "$WEB_PID" 2>/dev/null || true
+  if [ -f "$OWNER_FILE" ]; then
+    "$PROCESS_OWNER" stop "$OWNER_FILE" "$OWNED_WRAPPER" ||
+      echo "Could not verify and stop the recorded Web process." >&2
   fi
   : > "$RUNTIME_DIR/stopped"
 }
@@ -63,19 +66,34 @@ DEV_DEMO_STATE_FILE="$RUNTIME_DIR/demo-execution.json" \
 DEV_USER_ID="$DEV_USER_ID" \
 DEV_WORKSPACE_ID="$DEV_WORKSPACE_ID" \
 AUTO_UX_LOCAL_TEST_KEY="$AUTO_UX_LOCAL_TEST_KEY" \
-pnpm --filter @app/web build \
+scripts/build-workspaces.sh \
   >"$RUNTIME_DIR/build.log" 2>&1
-DATABASE_URL="$DATABASE_URL" \
-DEV_SESSION_SECRET="$DEV_SESSION_SECRET" \
-AUTO_UX_LOCAL_TEST_KEY="$AUTO_UX_LOCAL_TEST_KEY" \
-DEV_DEMO_STATE_FILE="$RUNTIME_DIR/demo-execution.json" \
-DEV_USER_ID="$DEV_USER_ID" \
-DEV_WORKSPACE_ID="$DEV_WORKSPACE_ID" \
-NODE_ENV=test \
-pnpm --dir "$PROJECT_ROOT/apps/web" exec next start --hostname 127.0.0.1 --port "$PORT" \
+PROCESS_MARKER=$(node -e 'process.stdout.write(require("node:crypto").randomBytes(16).toString("hex"))')
+"$OWNED_WRAPPER" "$PROCESS_MARKER" "$OWNER_FILE" env \
+  DATABASE_URL="$DATABASE_URL" \
+  DEV_SESSION_SECRET="$DEV_SESSION_SECRET" \
+  AUTO_UX_LOCAL_TEST_KEY="$AUTO_UX_LOCAL_TEST_KEY" \
+  DEV_DEMO_STATE_FILE="$RUNTIME_DIR/demo-execution.json" \
+  DEV_USER_ID="$DEV_USER_ID" \
+  DEV_WORKSPACE_ID="$DEV_WORKSPACE_ID" \
+  NODE_ENV=test \
+  pnpm --dir "$PROJECT_ROOT/apps/web" exec next start --hostname 127.0.0.1 --port "$PORT" \
   >"$RUNTIME_DIR/web.log" 2>&1 &
 WEB_PID=$!
-echo "$WEB_PID" > "$RUNTIME_DIR/web.pid"
+
+ATTEMPT=0
+while [ ! -f "$OWNER_FILE" ] && [ "$ATTEMPT" -lt 50 ]; do
+  if ! kill -0 "$WEB_PID" 2>/dev/null; then
+    echo "Web process wrapper exited before recording ownership. See $RUNTIME_DIR/web.log." >&2
+    exit 1
+  fi
+  ATTEMPT=$((ATTEMPT + 1))
+  sleep 0.1
+done
+if [ ! -f "$OWNER_FILE" ]; then
+  echo "Web process wrapper did not record ownership. See $RUNTIME_DIR/web.log." >&2
+  exit 1
+fi
 
 READY=0
 ATTEMPT=0

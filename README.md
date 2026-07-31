@@ -47,7 +47,7 @@ pnpm dev:up
 pnpm dev:down
 ```
 
-`dev:down` 只终止 `.dev-runtime/web.pid` 记录的 Web 子进程，并执行 `docker compose stop postgres`。它不删除数据卷。再次运行 `dev:up` 会检查残留 PID；如果上一个实例仍存活，会明确失败，不会重复启动。
+`dev:down` 只终止 `.dev-runtime/web.owner` 同时记录且通过“PID + 随机所有权标记 + 启动包装器路径”校验的 Web 子进程，然后执行 `docker compose stop postgres`。如果 PID 被复用或无法核实进程身份，脚本会拒绝发送信号并保留元数据供人工检查。它不删除数据卷。
 
 ## 环境变量
 
@@ -65,6 +65,16 @@ pnpm dev:down
 
 ## 验证
 
+`pnpm test` 会运行 contracts、execution-core、db、agent-simulator、web 和进程所有权脚本测试。其中数据库测试需要先启动 PostgreSQL、生成 Prisma Client 并应用已提交迁移：
+
+```bash
+docker compose up -d postgres
+DATABASE_URL="postgresql://control_plane:control_plane@127.0.0.1:5432/control_plane?schema=public" pnpm --filter @app/db exec prisma generate --schema prisma/schema.prisma
+DATABASE_URL="postgresql://control_plane:control_plane@127.0.0.1:5432/control_plane?schema=public" pnpm --filter @app/db exec prisma migrate deploy --schema prisma/schema.prisma
+```
+
+然后运行全仓验证：
+
 ```bash
 pnpm lint
 pnpm typecheck
@@ -73,7 +83,9 @@ pnpm e2e
 pnpm build
 ```
 
-`pnpm e2e` 自动调用 `dev:up`，验证进度刷新后仍从数据库恢复，并且 `publish`、`import_numbers`、`start_dial` 是三个分离的一次性确认门。它不会发起真实外呼。
+`pnpm build` 按 contracts、execution-core、db 类型检查、agent-simulator 类型检查、web 的顺序执行。`pnpm verify:clean-build` 会在 `mktemp` 创建的隔离副本中排除所有 `dist` 和 `.next` 产物，再运行同一构建入口；它不删除或改名当前工作区的共享产物。
+
+`pnpm e2e` 自动调用 `dev:up`，验证进度刷新后仍从数据库恢复，并且 `publish`、`import_numbers`、`start_dial` 是三个分离的一次性确认门。测试结束后无论成功或失败都会核验并清理自己启动的本地 Web 进程所有权记录，但不会停止或删除可能被其他开发任务复用的 PostgreSQL。它不会发起真实外呼。
 
 ## 架构与信任边界
 
