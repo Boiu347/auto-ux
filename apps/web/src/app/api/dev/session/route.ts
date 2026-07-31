@@ -15,23 +15,14 @@ const DevelopmentSessionRequestSchema = z
 
 export function createDevelopmentSessionHandlers({
   environment = process.env.NODE_ENV,
-  secret = process.env.DEV_SESSION_SECRET,
-  localTestKey = process.env.AUTO_UX_LOCAL_TEST_KEY
+  secret = process.env.DEV_SESSION_SECRET
 }: {
   environment?: string;
   secret?: string;
-  localTestKey?: string;
 } = {}) {
   return {
     async POST(request: Request): Promise<Response> {
-      const suppliedLocalTestKey = request.headers.get(
-        "x-auto-ux-local-key"
-      );
-      const localTestAuthorized =
-        typeof localTestKey === "string" &&
-        localTestKey.length >= 32 &&
-        suppliedLocalTestKey === localTestKey;
-      if (environment === "production" && !localTestAuthorized) {
+      if (environment !== "development" && environment !== "test") {
         return NextResponse.json({ code: "NOT_FOUND" }, { status: 404 });
       }
       if (!secret || secret.length < 32) {

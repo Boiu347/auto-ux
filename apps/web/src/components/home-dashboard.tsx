@@ -19,7 +19,6 @@ export function HomeDashboard({
   demoBootstrap?: {
     userId: string;
     workspaceId: string;
-    localTestKey: string;
   };
 }) {
   return (

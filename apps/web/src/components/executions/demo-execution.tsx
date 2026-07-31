@@ -10,7 +10,6 @@ export function DemoExecution({
   bootstrap: {
     userId: string;
     workspaceId: string;
-    localTestKey: string;
   };
 }) {
   const [executionId, setExecutionId] = useState<string>();
@@ -25,8 +24,7 @@ export function DemoExecution({
       const session = await fetch("/api/dev/session", {
         method: "POST",
         headers: {
-          "content-type": "application/json",
-          "x-auto-ux-local-key": bootstrap.localTestKey
+          "content-type": "application/json"
         },
         body: JSON.stringify({
           userId: bootstrap.userId,

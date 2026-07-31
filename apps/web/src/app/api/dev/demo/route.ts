@@ -9,6 +9,9 @@ import {
 } from "../../../../server/executions/service";
 
 export async function POST(request: Request): Promise<Response> {
+  if (process.env.NODE_ENV !== "development" && process.env.NODE_ENV !== "test") {
+    return NextResponse.json({ code: "NOT_FOUND" }, { status: 404 });
+  }
   const user = getCurrentUser(request);
   if (!user) {
     return NextResponse.json({ code: "UNAUTHENTICATED" }, { status: 401 });

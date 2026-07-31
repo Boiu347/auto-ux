@@ -161,6 +161,33 @@ test("execution survives refresh and stops at independent confirmations", async 
             ),
             confirmation
           );
+          await postEvent(grant.executionId, {
+            executionId: grant.executionId,
+            stepId: "dial.verify",
+            attempt: 14,
+            status: "succeeded",
+            occurredAt: "2026-07-30T00:01:14.000Z",
+            inputHash: "sha256:e2e00000000014",
+            evidence: {
+              kind: "platform_record",
+              summary: { outcome: "recorded" },
+              reference: {
+                kind: "platform_record",
+                id: "platform_record:000000000000000e"
+              }
+            },
+            nextAction: "stop"
+          });
+          await postEvent(
+            grant.executionId,
+            checkpoint(
+              grant.executionId,
+              "complete",
+              "complete",
+              "succeeded",
+              15
+            )
+          );
         }
         return { acknowledged: true as const };
       }
@@ -168,7 +195,11 @@ test("execution survives refresh and stops at independent confirmations", async 
   });
   await page.goto("/");
   await page.getByRole("button", { name: "创建演示任务" }).click();
-  await page.getByRole("link", { name: /查看任务/ }).click();
+  const executionLink = page.getByRole("link", { name: /查看任务/ });
+  const executionPath = await executionLink.getAttribute("href");
+  expect(executionPath).toMatch(/^\/executions\/execution_/);
+  const executionId = decodeURIComponent(executionPath!.split("/").at(-1)!);
+  await executionLink.click();
 
   await expect(page.getByText("环境预检")).toBeVisible();
   await page.reload();
@@ -199,5 +230,45 @@ test("execution survives refresh and stops at independent confirmations", async 
   await expect(
     page.getByRole("button", { name: "确认开始外呼" })
   ).not.toBeVisible();
-  await expect(page.getByText("无匹配的待确认动作")).toBeVisible();
+
+  await expect
+    .poll(async () => readDurableSummary(page, executionId))
+    .toEqual({ phase: "complete", status: "succeeded", lastStep: "complete" });
+
+  await page.reload();
+  await expect(
+    page.locator(".current-action-card dd").filter({ hasText: /^complete$/ })
+  ).toHaveCount(2);
+  await expect(
+    page.locator(".current-action-card").getByText("已完成", { exact: true })
+  ).toBeVisible();
+  await expect(readDurableSummary(page, executionId)).resolves.toEqual({
+    phase: "complete",
+    status: "succeeded",
+    lastStep: "complete"
+  });
 });
+
+async function readDurableSummary(
+  page: import("@playwright/test").Page,
+  executionId: string
+) {
+  return page.evaluate(async (id) => {
+    const response = await fetch(
+      `/api/executions/${encodeURIComponent(id)}`,
+      { headers: { accept: "application/json" } }
+    );
+    if (!response.ok) {
+      throw new Error(`summary rejected: ${response.status}`);
+    }
+    const payload = (await response.json()) as {
+      execution: { phase: string; status: string };
+      events: Array<{ event: { stepId: string } }>;
+    };
+    return {
+      phase: payload.execution.phase,
+      status: payload.execution.status,
+      lastStep: payload.events.at(-1)?.event.stepId
+    };
+  }, executionId);
+}

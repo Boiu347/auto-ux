@@ -27,7 +27,7 @@ const manifest: AgentCapabilityManifest = {
 };
 
 describe("local agent simulator", () => {
-  it("binds local API requests to the configured tenant and local test key", () => {
+  it("binds local API requests only to the configured non-production tenant", () => {
     expect(
       createLocalApiHeaders({
         SIMULATOR_USER_ID: "U-demo",
@@ -36,8 +36,7 @@ describe("local agent simulator", () => {
       })
     ).toEqual({
       "x-dev-user-id": "U-demo",
-      "x-dev-workspace-id": "W-demo",
-      "x-auto-ux-local-key": "local-test-key-with-at-least-32-characters"
+      "x-dev-workspace-id": "W-demo"
     });
   });
 

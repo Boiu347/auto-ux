@@ -35,7 +35,7 @@ pnpm dev:up
 
 1. 启动并等待 PostgreSQL。
 2. 生成 Prisma Client，使用 `prisma migrate deploy` 应用已提交迁移。
-3. 构建并在 `127.0.0.1:3100` 启动 Web。
+3. 验证生产构建，再以非生产 `next dev` 适配器在 `127.0.0.1:3100` 启动 Web。
 4. 通过真实 API 创建一个租户隔离的演示执行。
 5. 启动 HTTP 模拟器，在“确认发布”前停下。
 
@@ -58,7 +58,6 @@ pnpm dev:down
 | `DEV_USER_ID` | `U-1`，演示用户边界 |
 | `DEV_WORKSPACE_ID` | `W-1`，演示工作区边界 |
 | `DEV_SESSION_SECRET` | 本地 HttpOnly 会话签名密钥，至少 32 字符 |
-| `AUTO_UX_LOCAL_TEST_KEY` | 仅用于本地生产构建的测试适配器，至少 32 字符 |
 | `AUTO_UX_RUNTIME_DIR` | 运行时 PID、演示执行 ID 和日志目录 |
 
 `.env.example` 只提供本地示例。不要把真实会话、原始文档或完整电话号码写入环境文件。
@@ -85,7 +84,7 @@ pnpm build
 
 `pnpm build` 按 contracts、execution-core、db 类型检查、agent-simulator 类型检查、web 的顺序执行。`pnpm verify:clean-build` 会在 `mktemp` 创建的隔离副本中排除所有 `dist` 和 `.next` 产物，再运行同一构建入口；它不删除或改名当前工作区的共享产物。
 
-`pnpm e2e` 自动调用 `dev:up`，验证进度刷新后仍从数据库恢复，并且 `publish`、`import_numbers`、`start_dial` 是三个分离的一次性确认门。测试结束后无论成功或失败都会核验并清理自己启动的本地 Web 进程所有权记录，但不会停止或删除可能被其他开发任务复用的 PostgreSQL。它不会发起真实外呼。
+`pnpm e2e` 自动调用 `dev:up`。该入口先验证生产构建，再通过 `next dev` 启动仅限非生产环境的本地认证适配器；Playwright 等待 `/api/dev/ready` 确认演示执行已经持久化后才开始。生产环境无条件拒绝开发 Cookie 和请求头认证，客户端启动数据不包含任何认证密钥。测试结束后无论成功或失败都会核验并清理自己启动的本地 Web 进程所有权记录，但不会停止或删除可能被其他开发任务复用的 PostgreSQL。它不会发起真实外呼。
 
 ## 架构与信任边界
 
@@ -102,4 +101,4 @@ pnpm build
 - `publish`、`import_numbers`、`start_dial` 各自需要本人单独确认，凭据绑定执行、配置版本和动作，且不可重放。
 - 服务端不保存原始飞书文本、浏览器会话、原始上传文件或完整电话号码。
 - 浏览器确认凭据只交给持有当前执行锁的精确 Agent/session。
-- 本地测试适配器仅由 `dev:up` 显式开启，Web 只绑定 `127.0.0.1`。普通生产环境没有对应密钥时，开发会话路由和开发请求头都被拒绝。
+- 本地测试适配器仅由 `dev:up` 通过 `next dev` 显式开启，Web 只绑定 `127.0.0.1`。生产环境无条件隐藏开发会话和演示入口，并拒绝所有开发 Cookie、租户请求头及旧的本地测试密钥请求头；不存在可打开此认证分支的生产配置。

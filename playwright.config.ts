@@ -18,7 +18,7 @@ export default defineConfig({
   ],
   webServer: {
     command: "pnpm dev:up -- --e2e",
-    url: "http://127.0.0.1:3100/api/health",
+    url: "http://127.0.0.1:3100/api/dev/ready",
     reuseExistingServer: false,
     timeout: 120_000,
     stdout: "pipe",

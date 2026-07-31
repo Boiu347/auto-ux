@@ -5,7 +5,6 @@ PROJECT_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 RUNTIME_DIR=${AUTO_UX_RUNTIME_DIR:-"$PROJECT_ROOT/.dev-runtime"}
 DATABASE_URL=${DATABASE_URL:-"postgresql://control_plane:control_plane@127.0.0.1:5432/control_plane?schema=public"}
 DEV_SESSION_SECRET=${DEV_SESSION_SECRET:-"local-development-secret-32-bytes"}
-AUTO_UX_LOCAL_TEST_KEY=${AUTO_UX_LOCAL_TEST_KEY:-"local-test-key-with-at-least-32-characters"}
 DEV_USER_ID=${DEV_USER_ID:-"U-1"}
 DEV_WORKSPACE_ID=${DEV_WORKSPACE_ID:-"W-1"}
 PORT=${PORT:-3100}
@@ -62,22 +61,16 @@ DATABASE_URL="$DATABASE_URL" pnpm --filter @app/db exec prisma migrate deploy --
 
 rm -f "$RUNTIME_DIR/demo-execution.json" "$RUNTIME_DIR/stopped"
 DATABASE_URL="$DATABASE_URL" \
-DEV_DEMO_STATE_FILE="$RUNTIME_DIR/demo-execution.json" \
-DEV_USER_ID="$DEV_USER_ID" \
-DEV_WORKSPACE_ID="$DEV_WORKSPACE_ID" \
-AUTO_UX_LOCAL_TEST_KEY="$AUTO_UX_LOCAL_TEST_KEY" \
 scripts/build-workspaces.sh \
   >"$RUNTIME_DIR/build.log" 2>&1
 PROCESS_MARKER=$(node -e 'process.stdout.write(require("node:crypto").randomBytes(16).toString("hex"))')
 "$OWNED_WRAPPER" "$PROCESS_MARKER" "$OWNER_FILE" env \
   DATABASE_URL="$DATABASE_URL" \
   DEV_SESSION_SECRET="$DEV_SESSION_SECRET" \
-  AUTO_UX_LOCAL_TEST_KEY="$AUTO_UX_LOCAL_TEST_KEY" \
   DEV_DEMO_STATE_FILE="$RUNTIME_DIR/demo-execution.json" \
   DEV_USER_ID="$DEV_USER_ID" \
   DEV_WORKSPACE_ID="$DEV_WORKSPACE_ID" \
-  NODE_ENV=test \
-  pnpm --dir "$PROJECT_ROOT/apps/web" exec next start --hostname 127.0.0.1 --port "$PORT" \
+  pnpm --dir "$PROJECT_ROOT/apps/web" exec next dev --hostname 127.0.0.1 --port "$PORT" \
   >"$RUNTIME_DIR/web.log" 2>&1 &
 WEB_PID=$!
 
@@ -118,7 +111,6 @@ curl --fail --silent --show-error \
   -H "content-type: application/json" \
   -H "x-dev-user-id: $DEV_USER_ID" \
   -H "x-dev-workspace-id: $DEV_WORKSPACE_ID" \
-  -H "x-auto-ux-local-key: $AUTO_UX_LOCAL_TEST_KEY" \
   -d '{"configVersion":1}' \
   "$BASE_URL/api/executions" > "$RUNTIME_DIR/demo-execution.json"
 
@@ -131,7 +123,6 @@ EXECUTION_ID=$(node -e '
 
 SIMULATOR_USER_ID="$DEV_USER_ID" \
 SIMULATOR_WORKSPACE_ID="$DEV_WORKSPACE_ID" \
-AUTO_UX_LOCAL_TEST_KEY="$AUTO_UX_LOCAL_TEST_KEY" \
 pnpm agent:simulate --execution "$EXECUTION_ID" --api "$BASE_URL" \
   >"$RUNTIME_DIR/simulator.log" 2>&1
 
