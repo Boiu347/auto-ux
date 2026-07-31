@@ -15,14 +15,23 @@ const DevelopmentSessionRequestSchema = z
 
 export function createDevelopmentSessionHandlers({
   environment = process.env.NODE_ENV,
-  secret = process.env.DEV_SESSION_SECRET
+  secret = process.env.DEV_SESSION_SECRET,
+  localTestKey = process.env.AUTO_UX_LOCAL_TEST_KEY
 }: {
   environment?: string;
   secret?: string;
+  localTestKey?: string;
 } = {}) {
   return {
     async POST(request: Request): Promise<Response> {
-      if (environment === "production") {
+      const suppliedLocalTestKey = request.headers.get(
+        "x-auto-ux-local-key"
+      );
+      const localTestAuthorized =
+        typeof localTestKey === "string" &&
+        localTestKey.length >= 32 &&
+        suppliedLocalTestKey === localTestKey;
+      if (environment === "production" && !localTestAuthorized) {
         return NextResponse.json({ code: "NOT_FOUND" }, { status: 404 });
       }
       if (!secret || secret.length < 32) {
@@ -33,7 +42,13 @@ export function createDevelopmentSessionHandlers({
       }
       const requestUrl = new URL(request.url);
       const origin = request.headers.get("origin");
-      if (origin && origin !== requestUrl.origin) {
+      const sameOriginBrowserRequest =
+        request.headers.get("sec-fetch-site") === "same-origin";
+      if (
+        origin &&
+        origin !== requestUrl.origin &&
+        !sameOriginBrowserRequest
+      ) {
         return NextResponse.json(
           { code: "CROSS_ORIGIN_REQUEST" },
           { status: 403 }

@@ -357,7 +357,7 @@ const phases: Array<{
 }> = [
   { stepId: "source.parse", label: "解析配置来源" },
   { stepId: "draft.confirm", label: "确认配置草案" },
-  { stepId: "environment.preflight", label: "检查执行环境" },
+  { stepId: "environment.preflight", label: "环境预检" },
   { stepId: "robot.create", label: "创建外呼机器人" },
   { stepId: "field.configure", label: "写入机器人配置" },
   { stepId: "voice.preflight", label: "检查语音能力" },

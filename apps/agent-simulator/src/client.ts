@@ -407,6 +407,18 @@ export class HttpLocalApiClient implements LocalApiClient {
   }
 }
 
+export function createLocalApiHeaders(
+  environment: Record<string, string | undefined> = process.env
+): Record<string, string> {
+  return {
+    "x-dev-user-id": environment.SIMULATOR_USER_ID ?? "U-1",
+    "x-dev-workspace-id": environment.SIMULATOR_WORKSPACE_ID ?? "W-1",
+    ...(environment.AUTO_UX_LOCAL_TEST_KEY
+      ? { "x-auto-ux-local-key": environment.AUTO_UX_LOCAL_TEST_KEY }
+      : {})
+  };
+}
+
 export interface SimulationResult {
   simulator: true;
   outputLabel: "SIMULATOR_ONLY";

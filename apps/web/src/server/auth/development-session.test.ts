@@ -126,4 +126,59 @@ describe("development browser session", () => {
     expect(sameOrigin.status).toBe(204);
     expect(sameOrigin.headers.get("set-cookie")).toContain("Secure");
   });
+
+  it("allows production-built local tests only with an explicit matching key", async () => {
+    const localTestKey = "local-test-key-with-at-least-32-characters";
+    const handlers = createDevelopmentSessionHandlers({
+      environment: "production",
+      secret,
+      localTestKey
+    });
+    const denied = await handlers.POST(
+      new Request("http://127.0.0.1/api/dev/session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: "U-1", workspaceId: "W-1" })
+      })
+    );
+    expect(denied.status).toBe(404);
+
+    const issued = await handlers.POST(
+      new Request("http://127.0.0.1/api/dev/session", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-auto-ux-local-key": localTestKey
+        },
+        body: JSON.stringify({ userId: "U-1", workspaceId: "W-1" })
+      })
+    );
+    expect(issued.status).toBe(204);
+    const cookie = issued.headers.get("set-cookie")!.split(";")[0]!;
+
+    expect(
+      getCurrentUser(
+        new Request("http://127.0.0.1/api/executions", {
+          headers: { cookie }
+        }),
+        "production",
+        secret,
+        localTestKey
+      )
+    ).toEqual({ userId: "U-1", workspaceId: "W-1" });
+    expect(
+      getCurrentUser(
+        new Request("http://127.0.0.1/api/executions", {
+          headers: {
+            "x-dev-user-id": "U-1",
+            "x-dev-workspace-id": "W-1",
+            "x-auto-ux-local-key": "wrong"
+          }
+        }),
+        "production",
+        secret,
+        localTestKey
+      )
+    ).toBeNull();
+  });
 });

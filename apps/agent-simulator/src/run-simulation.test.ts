@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   AgentClientError,
+  createLocalApiHeaders,
   FakeConfirmationBridge,
   FakeLocalApiClient,
   FakeLocalApiPersistence,
@@ -26,6 +27,20 @@ const manifest: AgentCapabilityManifest = {
 };
 
 describe("local agent simulator", () => {
+  it("binds local API requests to the configured tenant and local test key", () => {
+    expect(
+      createLocalApiHeaders({
+        SIMULATOR_USER_ID: "U-demo",
+        SIMULATOR_WORKSPACE_ID: "W-demo",
+        AUTO_UX_LOCAL_TEST_KEY: "local-test-key-with-at-least-32-characters"
+      })
+    ).toEqual({
+      "x-dev-user-id": "U-demo",
+      "x-dev-workspace-id": "W-demo",
+      "x-auto-ux-local-key": "local-test-key-with-at-least-32-characters"
+    });
+  });
+
   it("runs the documented CLI deterministically without external services", () => {
     const output = execFileSync(
       process.execPath,

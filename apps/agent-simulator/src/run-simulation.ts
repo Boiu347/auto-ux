@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   FakeLocalApiClient,
   HttpLocalApiClient,
+  createLocalApiHeaders,
   SUPPORTED_CONTRACT_VERSION,
   type AgentCapabilityManifest,
   type ConfirmationBridge,
@@ -329,10 +330,7 @@ async function main(): Promise<void> {
   }
   const baseUrl = argument("--api");
   const api = baseUrl
-    ? new HttpLocalApiClient(baseUrl, {
-        "x-dev-user-id": process.env.SIMULATOR_USER_ID ?? "U-1",
-        "x-dev-workspace-id": process.env.SIMULATOR_WORKSPACE_ID ?? "W-1"
-      })
+    ? new HttpLocalApiClient(baseUrl, createLocalApiHeaders())
     : new FakeLocalApiClient({ executionId });
   const simulation = await runSimulation({ executionId, api });
   process.stdout.write(`${JSON.stringify({ executionId, ...simulation })}\n`);
