@@ -689,6 +689,112 @@ describe("execution events API", () => {
     );
   });
 
+  it("supersedes an older live confirmation for the same exact gate", async () => {
+    const store = confirmationGateStore();
+    const service = new ExecutionService(store);
+
+    const first = await service.issueCreatorConfirmation(
+      "EX-1",
+      "publish",
+      1,
+      "agent-owner"
+    );
+    const second = await service.issueCreatorConfirmation(
+      "EX-1",
+      "publish",
+      1,
+      "agent-owner"
+    );
+
+    await expect(
+      service.appendEvent(
+        "agent-owner",
+        confirmedPublishEvent(1),
+        first
+      )
+    ).rejects.toMatchObject({ code: "CONFIRMATION_INVALID" });
+    await expect(
+      service.appendEvent(
+        "agent-owner",
+        confirmedPublishEvent(1),
+        second
+      )
+    ).resolves.toBeUndefined();
+    expect(store.events).toHaveLength(1);
+  });
+
+  it("serializes concurrent confirmation issuance so only one token remains live", async () => {
+    const store = confirmationGateStore();
+    const service = new ExecutionService(store);
+
+    const [first, second] = await Promise.all([
+      service.issueCreatorConfirmation("EX-1", "publish", 1, "agent-owner"),
+      service.issueCreatorConfirmation("EX-1", "publish", 1, "agent-owner")
+    ]);
+
+    const appendResults = await Promise.allSettled([
+      service.appendEvent(
+        "agent-owner",
+        confirmedPublishEvent(1),
+        first
+      ),
+      service.appendEvent(
+        "agent-owner",
+        confirmedPublishEvent(2),
+        second
+      )
+    ]);
+
+    expect(
+      appendResults.filter((result) => result.status === "fulfilled")
+    ).toHaveLength(1);
+    expect(
+      appendResults.filter(
+        (result) =>
+          result.status === "rejected" &&
+          result.reason instanceof Error &&
+          "code" in result.reason &&
+          result.reason.code === "CONFIRMATION_INVALID"
+      )
+    ).toHaveLength(1);
+    expect(store.events).toHaveLength(1);
+  });
+
+  it("rejects a live confirmation replay after its exact gate has closed", async () => {
+    const store = confirmationGateStore();
+    const service = new ExecutionService(store);
+    const first = await service.issueCreatorConfirmation(
+      "EX-1",
+      "publish",
+      1,
+      "agent-owner"
+    );
+    const second = await service.issueCreatorConfirmation(
+      "EX-1",
+      "publish",
+      1,
+      "agent-owner"
+    );
+
+    await service.appendEvent(
+      "agent-owner",
+      confirmedPublishEvent(1),
+      second
+    );
+    await expect(
+      service.appendEvent(
+        "agent-owner",
+        confirmedPublishEvent(2),
+        first
+      )
+    ).rejects.toMatchObject({ code: "CONFIRMATION_INVALID" });
+    expect(store.events).toHaveLength(1);
+    expect(store.execution).toMatchObject({
+      status: "succeeded",
+      phase: "publish_confirm"
+    });
+  });
+
   it("refuses to issue a confirmation for a bridge agent without the current lock", async () => {
     const store = new MemoryExecutionStore();
     store.execution = {
@@ -1126,6 +1232,28 @@ function executionRecord() {
   };
 }
 
+function confirmationGateStore(): MemoryExecutionStore {
+  const store = new MemoryExecutionStore();
+  store.execution = {
+    ...executionRecord(),
+    status: "waiting_confirmation",
+    phase: "publish_confirm"
+  };
+  store.lockAgentId = "agent-owner";
+  store.agentHeartbeat = {
+    agentId: "agent-owner",
+    lastHeartbeatAt: new Date("2026-07-30T08:00:00.000Z")
+  };
+  return store;
+}
+
+function confirmedPublishEvent(attempt: number): ExecutionEvent {
+  return {
+    ...checkpointEvent("publish.confirm", "succeeded", "publish_confirm"),
+    attempt
+  };
+}
+
 function request(url: string, init?: RequestInit): Request {
   return requestAs(owner, url, init);
 }
@@ -1374,16 +1502,53 @@ class MemoryExecutionStore implements ExecutionDataStore {
     return scopedEvents.slice(cursorIndex + 1);
   }
 
-  async createConfirmation(input: {
+  async createConfirmationForGate(input: {
     id: string;
     executionId: string;
     action: ConfirmationAction;
     configVersion: number;
     tokenHash: string;
     expiresAt: Date;
-  }): Promise<ConfirmationRecord> {
-    if (!(await this.findExecution())) {
-      throw new Error("execution outside scope");
+    agentId: string;
+    expectedState: {
+      status: "waiting_confirmation";
+      phase: ExecutionPhase;
+    };
+  }): Promise<
+    | { status: "created"; confirmation: ConfirmationRecord }
+    | { status: "state_mismatch" }
+    | { status: "lock_mismatch" }
+  > {
+    if (
+      !this.execution ||
+      this.execution.userId !== this.activeScope.userId ||
+      this.execution.workspaceId !== this.activeScope.workspaceId ||
+      this.execution.status !== input.expectedState.status ||
+      this.execution.phase !== input.expectedState.phase ||
+      this.execution.configVersion !== input.configVersion
+    ) {
+      return { status: "state_mismatch" };
+    }
+    if (this.agentHeartbeat?.agentId !== input.agentId) {
+      return { status: "lock_mismatch" };
+    }
+
+    const invalidatedAt = new Date();
+    for (const record of this.confirmations) {
+      if (
+        record.confirmation.executionId === input.executionId &&
+        record.confirmation.userId === this.activeScope.userId &&
+        record.confirmation.workspaceId === this.activeScope.workspaceId &&
+        record.confirmation.action === input.action &&
+        record.confirmation.configVersion === input.configVersion &&
+        record.confirmation.consumedAt === null &&
+        record.confirmation.expiresAt.getTime() > invalidatedAt.getTime()
+      ) {
+        record.confirmation = {
+          ...record.confirmation,
+          consumedAt: invalidatedAt
+        };
+      }
     }
     const confirmation: ConfirmationRecord = {
       id: input.id,
@@ -1397,7 +1562,7 @@ class MemoryExecutionStore implements ExecutionDataStore {
       createdAt: new Date()
     };
     this.confirmations.push({ confirmation, tokenHash: input.tokenHash });
-    return confirmation;
+    return { status: "created", confirmation };
   }
 
   async findConfirmation(input: {

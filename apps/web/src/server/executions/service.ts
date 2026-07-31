@@ -28,6 +28,7 @@ import {
   consumeConfirmation as consumeDomainConfirmation,
   issueConfirmation as issueDomainConfirmation,
   transition,
+  wasConfirmationGrantConsumed,
   type ConfirmationGrant
 } from "@app/execution-core";
 import { z } from "zod";
@@ -122,14 +123,23 @@ export interface ExecutionDataStore {
     executionId: string,
     cursor?: string
   ): Promise<PersistedStepEvent[]>;
-  createConfirmation(input: {
+  createConfirmationForGate(input: {
     id: string;
     executionId: string;
     action: ConfirmationAction;
     configVersion: number;
     tokenHash: string;
     expiresAt: Date;
-  }): Promise<ConfirmationRecord>;
+    agentId: string;
+    expectedState: {
+      status: "waiting_confirmation";
+      phase: ExecutionPhase;
+    };
+  }): Promise<
+    | { status: "created"; confirmation: ConfirmationRecord }
+    | { status: "state_mismatch" }
+    | { status: "lock_mismatch" }
+  >;
   findConfirmation(input: ConfirmationClaim): Promise<ConfirmationRecord | null>;
 }
 
@@ -258,6 +268,12 @@ export class ExecutionService {
     } catch {
       throw new ExecutionServiceError("INVALID_EXECUTION_TRANSITION", 409);
     }
+    if (
+      preparedConfirmation &&
+      !wasConfirmationGrantConsumed(preparedConfirmation.grant)
+    ) {
+      throw new ExecutionServiceError("CONFIRMATION_INVALID", 409);
+    }
 
     const result = await this.store.appendEventForAgent({
       agentId,
@@ -312,14 +328,25 @@ export class ExecutionService {
     const confirmationId = `confirm:${this.randomHex(16)}`;
     const token = `confirm_token:${this.randomHex(32)}`;
     const expiresAt = new Date(this.now().getTime() + 5 * 60_000);
-    await this.store.createConfirmation({
+    const issued = await this.store.createConfirmationForGate({
       id: confirmationId,
       executionId,
       action,
       configVersion,
       tokenHash: hashToken(token),
-      expiresAt
+      expiresAt,
+      agentId,
+      expectedState: {
+        status: "waiting_confirmation",
+        phase: execution.phase
+      }
     });
+    if (issued.status === "lock_mismatch") {
+      throw new ExecutionServiceError("EXECUTION_LOCK_MISMATCH", 409);
+    }
+    if (issued.status === "state_mismatch") {
+      throw new ExecutionServiceError("CONFIRMATION_ACTION_MISMATCH", 409);
+    }
     return {
       action,
       executionId,
@@ -432,6 +459,9 @@ export class ExecutionService {
     execution: ExecutionRecord,
     proof: ConfirmationProof
   ): Promise<{ grant: ConfirmationGrant; claim: ConfirmationClaim }> {
+    if (execution.status !== "waiting_confirmation") {
+      throw new ExecutionServiceError("CONFIRMATION_INVALID", 409);
+    }
     const expectedAction = confirmationActionForPhase(execution.phase);
     if (!expectedAction || proof.action !== expectedAction) {
       throw new ExecutionServiceError("CONFIRMATION_ACTION_MISMATCH", 409);
@@ -558,15 +588,93 @@ class PrismaExecutionDataStore implements ExecutionDataStore {
     return this.repository.listStepEventsAfter(executionId, cursor);
   }
 
-  createConfirmation(input: {
+  async createConfirmationForGate(input: {
     id: string;
     executionId: string;
     action: ConfirmationAction;
     configVersion: number;
     tokenHash: string;
     expiresAt: Date;
-  }): Promise<ConfirmationRecord> {
-    return this.repository.createConfirmation(input);
+    agentId: string;
+    expectedState: {
+      status: "waiting_confirmation";
+      phase: ExecutionPhase;
+    };
+  }): Promise<
+    | { status: "created"; confirmation: ConfirmationRecord }
+    | { status: "state_mismatch" }
+    | { status: "lock_mismatch" }
+  > {
+    return prisma.$transaction(async (transaction) => {
+      const rows = await transaction.$queryRaw<
+        Array<{
+          status: string;
+          phase: string;
+          configVersion: number;
+          executionLockAgentId: string | null;
+          lockActive: boolean;
+        }>
+      >`
+        SELECT "status", "phase", "configVersion", "executionLockAgentId",
+               ("executionLockExpiresAt" > CURRENT_TIMESTAMP) AS "lockActive"
+        FROM "Execution"
+        WHERE "id" = ${input.executionId}
+          AND "userId" = ${this.scope.userId}
+          AND "workspaceId" = ${this.scope.workspaceId}
+        FOR UPDATE`;
+      const execution = rows[0];
+      if (
+        !execution ||
+        execution.status !== input.expectedState.status ||
+        execution.phase !== input.expectedState.phase ||
+        execution.configVersion !== input.configVersion
+      ) {
+        return { status: "state_mismatch" } as const;
+      }
+      if (
+        !execution.lockActive ||
+        execution.executionLockAgentId !== input.agentId
+      ) {
+        return { status: "lock_mismatch" } as const;
+      }
+
+      await transaction.$executeRaw`
+        UPDATE "Confirmation"
+        SET "consumedAt" = CURRENT_TIMESTAMP
+        WHERE "executionId" = ${input.executionId}
+          AND "userId" = ${this.scope.userId}
+          AND "workspaceId" = ${this.scope.workspaceId}
+          AND "action" = ${input.action}::"ConfirmationAction"
+          AND "configVersion" = ${input.configVersion}
+          AND "consumedAt" IS NULL
+          AND "expiresAt" > CURRENT_TIMESTAMP`;
+      const confirmation = await transaction.confirmation.create({
+        data: {
+          id: input.id,
+          executionId: input.executionId,
+          userId: this.scope.userId,
+          workspaceId: this.scope.workspaceId,
+          action: input.action,
+          configVersion: input.configVersion,
+          tokenHash: input.tokenHash,
+          expiresAt: input.expiresAt
+        }
+      });
+      return {
+        status: "created",
+        confirmation: {
+          id: confirmation.id,
+          executionId: confirmation.executionId,
+          userId: confirmation.userId,
+          workspaceId: confirmation.workspaceId,
+          action: confirmation.action,
+          configVersion: confirmation.configVersion,
+          expiresAt: confirmation.expiresAt,
+          consumedAt: confirmation.consumedAt,
+          createdAt: confirmation.createdAt
+        }
+      } as const;
+    });
   }
 
   findConfirmation(

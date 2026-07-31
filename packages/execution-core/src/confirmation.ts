@@ -79,6 +79,8 @@ export function issueConfirmation(
     throw new Error("expiresAt must be a valid date");
   }
 
+  invalidateConfirmations(validatedAction, executionId, configVersion);
+
   const record: TokenRecord = {
     action: validatedAction,
     executionId,
@@ -175,6 +177,13 @@ export function takeConfirmationGrant(
   grantRecord.used = true;
   removeGrantRecord(grantRecord);
   return true;
+}
+
+/** Reports whether the state-machine boundary actually consumed this opaque grant. */
+export function wasConfirmationGrantConsumed(
+  grant: ConfirmationGrant | undefined
+): boolean {
+  return grantRecords.get(grant ?? {})?.used === true;
 }
 
 /** Invalidates all prior tokens and grants bound to a recovered high-risk action. */

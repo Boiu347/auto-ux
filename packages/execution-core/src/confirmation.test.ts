@@ -31,6 +31,25 @@ describe("action journal", () => {
 });
 
 describe("confirmation", () => {
+  it("invalidates an older live token when the same exact gate is issued again", () => {
+    const first = issueConfirmation("publish", "EX-1", 4, futureDate);
+    const second = issueConfirmation("publish", "EX-1", 4, futureDate);
+
+    expect(consumeConfirmation(first, "publish", "EX-1", 4)).toEqual({
+      ok: false,
+      reason: "invalidated"
+    });
+    expect(consumeConfirmation(second, "publish", "EX-1", 4).ok).toBe(true);
+  });
+
+  it("keeps tokens for different gate bindings independent", () => {
+    const oldVersion = issueConfirmation("publish", "EX-1", 4, futureDate);
+    const newVersion = issueConfirmation("publish", "EX-1", 5, futureDate);
+
+    expect(consumeConfirmation(oldVersion, "publish", "EX-1", 4).ok).toBe(true);
+    expect(consumeConfirmation(newVersion, "publish", "EX-1", 5).ok).toBe(true);
+  });
+
   it("consumes a start_dial token only once", () => {
     const token = issueConfirmation("start_dial", "EX-1", 4, futureDate);
 
