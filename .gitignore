@@ -1,0 +1,12 @@
+.superpowers/
+.worktrees/
+.env
+.env.*
+node_modules/
+.next/
+dist/
+coverage/
+.dev-runtime/
+playwright-report/
+test-results/
+*.tsbuildinfo

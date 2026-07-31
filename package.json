@@ -1,0 +1,22 @@
+{
+  "name": "baidu-one-click-config",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "agent:simulate": "pnpm --filter @app/contracts build && pnpm --filter @app/agent-simulator simulate",
+    "dev:down": "./scripts/dev-down.sh",
+    "dev:up": "./scripts/dev-up.sh",
+    "dev": "pnpm --filter @app/web dev",
+    "e2e": "./scripts/run-e2e.sh",
+    "build": "./scripts/build-workspaces.sh",
+    "test": "pnpm test:scripts && pnpm --filter @app/contracts test && pnpm --filter @app/execution-core test && pnpm --filter @app/db test && pnpm --filter @app/agent-simulator test && pnpm --filter @app/web test",
+    "test:scripts": "./tests/integration/process-ownership.test.sh",
+    "typecheck": "pnpm --filter @app/contracts typecheck && pnpm --filter @app/execution-core typecheck && pnpm --filter @app/db typecheck && pnpm --filter @app/agent-simulator typecheck && pnpm --filter @app/web typecheck",
+    "lint": "pnpm -r --if-present lint",
+    "verify:clean-build": "./scripts/verify-clean-build.sh"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.60.0"
+  }
+}
