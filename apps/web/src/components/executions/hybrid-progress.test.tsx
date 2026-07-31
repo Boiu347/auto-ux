@@ -472,6 +472,92 @@ describe("HybridProgress", () => {
     }
   );
 
+  it("discards a deferred issuance response after unmount without leaking to a remount", async () => {
+    const waitingEvent = checkpoint(
+      "publish.confirm",
+      "waiting_confirmation",
+      "publish_confirm"
+    );
+    const waitingSummary: ExecutionSummary = {
+      ...execution,
+      status: "waiting_confirmation",
+      phase: "publish_confirm"
+    };
+    const issued = {
+      confirmationId: "confirm:abcdef0123456789",
+      action: "publish" as const,
+      executionId: "EX-1",
+      configVersion: 7,
+      token: `confirm_token:${"4".repeat(64)}`,
+      expiresAt: "2099-07-30T08:05:00.000Z"
+    };
+    const originalConnection: BridgeConnection = {
+      connected: true,
+      agentId: "agent-owner",
+      sessionId: "session-owner",
+      executionId: "EX-1"
+    };
+    const oldBridge = mutableBridge(originalConnection);
+    const newBridge = mutableBridge(originalConnection);
+    const post = deferred<Response>();
+    let issuanceSignal: AbortSignal | null | undefined;
+    const fetchMock = vi.fn(
+      (url: string | URL | Request, init?: RequestInit) => {
+        if (String(url).endsWith("/confirmations")) {
+          issuanceSignal = init?.signal;
+          return post.promise;
+        }
+        return Promise.resolve(summaryResponse(waitingSummary, waitingEvent));
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = render(
+      <HybridProgress
+        execution={waitingSummary}
+        initialEvents={[persisted("cursor:opaque:publish", waitingEvent)]}
+        localAgentBridge={oldBridge}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "确认发布" }));
+    await waitFor(() =>
+      expect(confirmationPostCalls(fetchMock)).toHaveLength(1)
+    );
+
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const timeout = vi.spyOn(globalThis, "setTimeout");
+    first.unmount();
+    expect(issuanceSignal?.aborted).toBe(true);
+
+    render(
+      <HybridProgress
+        execution={waitingSummary}
+        initialEvents={[persisted("cursor:opaque:publish", waitingEvent)]}
+        localAgentBridge={newBridge}
+      />
+    );
+    timeout.mockClear();
+    await act(async () => {
+      post.resolve(
+        new Response(JSON.stringify({ confirmation: issued }), {
+          status: 201,
+          headers: { "content-type": "application/json" }
+        })
+      );
+      await post.promise;
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(timeout).not.toHaveBeenCalled();
+    expect(oldBridge.deliverConfirmation).not.toHaveBeenCalled();
+    expect(newBridge.deliverConfirmation).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(confirmationPostCalls(fetchMock)).toHaveLength(1);
+  });
+
   it("retries delivery with the same in-memory token and clears it after ACK", async () => {
     const issued = {
       confirmationId: "confirm:0123456789abcdef",

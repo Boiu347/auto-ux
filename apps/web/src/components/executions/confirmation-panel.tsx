@@ -104,6 +104,8 @@ export function ConfirmationPanel({
     undefined
   );
   const expiryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const issuanceAbort = useRef<AbortController | null>(null);
+  const operationGeneration = useRef(0);
   const busy = useRef(false);
   const mounted = useRef(false);
   const gate = confirmationByPhase[execution.phase];
@@ -135,6 +137,9 @@ export function ConfirmationPanel({
     mounted.current = true;
     return () => {
       mounted.current = false;
+      operationGeneration.current += 1;
+      issuanceAbort.current?.abort();
+      issuanceAbort.current = null;
       busy.current = false;
       issuedGrant.current = undefined;
       expectedConnection.current = undefined;
@@ -154,11 +159,20 @@ export function ConfirmationPanel({
     event?.status === "waiting_confirmation" &&
     event.stepId === gate?.stepId;
 
-  const refreshAfterConflict = async (message: string) => {
+  const isActiveOperation = (generation: number): boolean =>
+    mounted.current && operationGeneration.current === generation;
+
+  const refreshAfterConflict = async (
+    message: string,
+    generation: number
+  ) => {
+    if (!isActiveOperation(generation)) {
+      return;
+    }
     setSubmission({ state: "refreshing", message });
     try {
       const summary = await refreshSummary();
-      if (!mounted.current) {
+      if (!isActiveOperation(generation)) {
         return;
       }
       if (summary && stillWaitingForGate(summary)) {
@@ -167,14 +181,16 @@ export function ConfirmationPanel({
         setSubmission({ state: "refresh_required", message });
       }
     } catch {
-      if (mounted.current) {
+      if (isActiveOperation(generation)) {
         setSubmission({
           state: "refresh_required",
           message: `${message} 无法刷新执行状态。`
         });
       }
     } finally {
-      busy.current = false;
+      if (isActiveOperation(generation)) {
+        busy.current = false;
+      }
     }
   };
 
@@ -188,16 +204,22 @@ export function ConfirmationPanel({
       if (!mounted.current || issuedGrant.current !== grant) {
         return;
       }
+      const generation = operationGeneration.current + 1;
+      operationGeneration.current = generation;
       clearIssuedGrant();
       busy.current = false;
-      void refreshAfterConflict("确认凭据已过期。");
+      void refreshAfterConflict("确认凭据已过期。", generation);
     }, Math.min(delay, 2_147_483_647));
   };
 
   const deliver = async (
     grant: LocalAgentConfirmationDelivery,
-    expected: LocalAgentBridgeConnection
+    expected: LocalAgentBridgeConnection,
+    generation: number
   ) => {
+    if (!isActiveOperation(generation) || issuedGrant.current !== grant) {
+      return;
+    }
     if (!bridge) {
       setSubmission({
         state: "delivery_error",
@@ -209,7 +231,10 @@ export function ConfirmationPanel({
     setSubmission({ state: "delivering", expiresAt: grant.expiresAt });
     try {
       const summary = await refreshSummary();
-      if (!mounted.current || issuedGrant.current !== grant) {
+      if (
+        !isActiveOperation(generation) ||
+        issuedGrant.current !== grant
+      ) {
         return;
       }
       if (
@@ -240,7 +265,7 @@ export function ConfirmationPanel({
       }
       const acknowledgement = await bridge.deliverConfirmation(grant);
       if (
-        !mounted.current ||
+        !isActiveOperation(generation) ||
         issuedGrant.current !== grant ||
         acknowledgement.acknowledged !== true
       ) {
@@ -249,7 +274,10 @@ export function ConfirmationPanel({
       clearIssuedGrant();
       setSubmission({ state: "acknowledged" });
     } catch {
-      if (mounted.current && issuedGrant.current === grant) {
+      if (
+        isActiveOperation(generation) &&
+        issuedGrant.current === grant
+      ) {
         setSubmission({
           state: "delivery_error",
           message: "凭据交付失败，尚未由本地代理确认接收。",
@@ -263,9 +291,11 @@ export function ConfirmationPanel({
     if (busy.current || !gate || !matchesPersistedGate) {
       return;
     }
+    const generation = operationGeneration.current + 1;
+    operationGeneration.current = generation;
     if (submission.state === "refresh_required") {
       busy.current = true;
-      await refreshAfterConflict(submission.message);
+      await refreshAfterConflict(submission.message, generation);
       return;
     }
     if (!bridge) {
@@ -276,13 +306,16 @@ export function ConfirmationPanel({
     if (existing) {
       const expected = expectedConnection.current;
       if (expected) {
-        await deliver(existing, expected);
+        await deliver(existing, expected, generation);
       }
-      busy.current = false;
+      if (isActiveOperation(generation)) {
+        busy.current = false;
+      }
       return;
     }
 
     setSubmission({ state: "issuing" });
+    let controller: AbortController | null = null;
     try {
       const expected = bridge.getConnection();
       if (!isConnectionForExecution(expected, execution)) {
@@ -293,7 +326,7 @@ export function ConfirmationPanel({
         return;
       }
       const authoritative = await refreshSummary();
-      if (!mounted.current) {
+      if (!isActiveOperation(generation)) {
         return;
       }
       if (
@@ -318,11 +351,14 @@ export function ConfirmationPanel({
         });
         return;
       }
+      controller = new AbortController();
+      issuanceAbort.current = controller;
       const response = await fetch(
         `/api/executions/${encodeURIComponent(execution.id)}/confirmations`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             action: gate.action,
             configVersion: execution.configVersion,
@@ -330,16 +366,23 @@ export function ConfirmationPanel({
           })
         }
       );
+      if (!isActiveOperation(generation)) {
+        return;
+      }
       const payload = (await response.json().catch(() => ({}))) as {
         code?: string;
         confirmation?: unknown;
       };
+      if (!isActiveOperation(generation)) {
+        return;
+      }
       if (!response.ok) {
         if (response.status === 409 || response.status === 410) {
           await refreshAfterConflict(
-            confirmationError(response.status, payload.code)
+            confirmationError(response.status, payload.code),
+            generation
           );
-        } else if (mounted.current) {
+        } else if (isActiveOperation(generation)) {
           setSubmission({
             state: "error",
             message: confirmationError(response.status, payload.code)
@@ -359,20 +402,28 @@ export function ConfirmationPanel({
         });
         return;
       }
+      if (!isActiveOperation(generation)) {
+        return;
+      }
       issuedGrant.current = grant;
       expectedConnection.current = expected;
       setIssuedConnectionSnapshot(serializeConnection(expected));
       scheduleExpiry(grant);
-      await deliver(grant, expected);
+      await deliver(grant, expected, generation);
     } catch {
-      if (mounted.current) {
+      if (isActiveOperation(generation)) {
         setSubmission({
           state: "error",
           message: "确认请求失败。执行状态未变更，请检查连接后重试。"
         });
       }
     } finally {
-      busy.current = false;
+      if (controller && issuanceAbort.current === controller) {
+        issuanceAbort.current = null;
+      }
+      if (isActiveOperation(generation)) {
+        busy.current = false;
+      }
     }
   };
 
