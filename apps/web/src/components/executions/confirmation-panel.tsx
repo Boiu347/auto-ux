@@ -71,7 +71,9 @@ type Submission =
 
 const disconnected: LocalAgentBridgeConnection = {
   connected: false,
-  agentId: null
+  agentId: null,
+  sessionId: null,
+  executionId: null
 };
 
 export function ConfirmationPanel({
@@ -86,6 +88,9 @@ export function ConfirmationPanel({
   refreshSummary: () => Promise<ExecutionSummary | undefined>;
 }) {
   const [submission, setSubmission] = useState<Submission>({ state: "idle" });
+  const [issuedConnectionSnapshot, setIssuedConnectionSnapshot] = useState<
+    string | null
+  >(null);
   const bridgeSnapshot = useSyncExternalStore(
     bridge ? bridge.subscribe.bind(bridge) : subscribeDisconnected,
     () => serializeConnection(bridge?.getConnection() ?? disconnected),
@@ -93,6 +98,9 @@ export function ConfirmationPanel({
   );
   const connection = deserializeConnection(bridgeSnapshot);
   const issuedGrant = useRef<LocalAgentConfirmationDelivery | undefined>(
+    undefined
+  );
+  const expectedConnection = useRef<LocalAgentBridgeConnection | undefined>(
     undefined
   );
   const expiryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -104,12 +112,19 @@ export function ConfirmationPanel({
     event?.status === "waiting_confirmation" &&
     event.stepId === gate?.stepId;
   const bridgeMatchesExecution =
-    connection.connected &&
-    Boolean(execution.agentId) &&
-    connection.agentId === execution.agentId;
+    isConnectionForExecution(connection, execution);
+  const issuedConnection = issuedConnectionSnapshot
+    ? deserializeConnection(issuedConnectionSnapshot)
+    : null;
+  const bridgeMatchesIssuedGrant = issuedConnection
+    ? sameConnection(connection, issuedConnection) &&
+      isConnectionForExecution(connection, execution)
+    : bridgeMatchesExecution;
 
   const clearIssuedGrant = () => {
     issuedGrant.current = undefined;
+    expectedConnection.current = undefined;
+    setIssuedConnectionSnapshot(null);
     if (expiryTimer.current) {
       clearTimeout(expiryTimer.current);
       expiryTimer.current = null;
@@ -121,7 +136,12 @@ export function ConfirmationPanel({
     return () => {
       mounted.current = false;
       busy.current = false;
-      clearIssuedGrant();
+      issuedGrant.current = undefined;
+      expectedConnection.current = undefined;
+      if (expiryTimer.current) {
+        clearTimeout(expiryTimer.current);
+        expiryTimer.current = null;
+      }
     };
   }, []);
 
@@ -174,8 +194,11 @@ export function ConfirmationPanel({
     }, Math.min(delay, 2_147_483_647));
   };
 
-  const deliver = async (grant: LocalAgentConfirmationDelivery) => {
-    if (!bridge || !bridgeMatchesExecution) {
+  const deliver = async (
+    grant: LocalAgentConfirmationDelivery,
+    expected: LocalAgentBridgeConnection
+  ) => {
+    if (!bridge) {
       setSubmission({
         state: "delivery_error",
         message: "本地代理桥未连接，凭据尚未交付。",
@@ -185,6 +208,36 @@ export function ConfirmationPanel({
     }
     setSubmission({ state: "delivering", expiresAt: grant.expiresAt });
     try {
+      const summary = await refreshSummary();
+      if (!mounted.current || issuedGrant.current !== grant) {
+        return;
+      }
+      if (
+        !summary ||
+        !stillWaitingForGate(summary) ||
+        summary.agentId !== expected.agentId
+      ) {
+        setSubmission({
+          state: "delivery_error",
+          message:
+            "执行锁代理已变化或无法核实，凭据尚未交付。",
+          expiresAt: grant.expiresAt
+        });
+        return;
+      }
+      const liveConnection = bridge.getConnection();
+      if (
+        !sameConnection(liveConnection, expected) ||
+        !isConnectionForExecution(liveConnection, summary)
+      ) {
+        setSubmission({
+          state: "delivery_error",
+          message:
+            "本地代理连接已变化，凭据尚未交付。请恢复原连接后重试。",
+          expiresAt: grant.expiresAt
+        });
+        return;
+      }
       const acknowledgement = await bridge.deliverConfirmation(grant);
       if (
         !mounted.current ||
@@ -215,19 +268,56 @@ export function ConfirmationPanel({
       await refreshAfterConflict(submission.message);
       return;
     }
-    if (!bridgeMatchesExecution) {
+    if (!bridge) {
       return;
     }
     busy.current = true;
     const existing = issuedGrant.current;
     if (existing) {
-      await deliver(existing);
+      const expected = expectedConnection.current;
+      if (expected) {
+        await deliver(existing, expected);
+      }
       busy.current = false;
       return;
     }
 
     setSubmission({ state: "issuing" });
     try {
+      const expected = bridge.getConnection();
+      if (!isConnectionForExecution(expected, execution)) {
+        setSubmission({
+          state: "error",
+          message: "本地代理连接已变化，未签发确认凭据。"
+        });
+        return;
+      }
+      const authoritative = await refreshSummary();
+      if (!mounted.current) {
+        return;
+      }
+      if (
+        !authoritative ||
+        !stillWaitingForGate(authoritative) ||
+        authoritative.agentId !== expected.agentId
+      ) {
+        setSubmission({
+          state: "refresh_required",
+          message: "无法核实当前执行锁代理，未签发确认凭据。"
+        });
+        return;
+      }
+      const beforePost = bridge.getConnection();
+      if (
+        !sameConnection(beforePost, expected) ||
+        !isConnectionForExecution(beforePost, authoritative)
+      ) {
+        setSubmission({
+          state: "error",
+          message: "本地代理连接已变化，未签发确认凭据。"
+        });
+        return;
+      }
       const response = await fetch(
         `/api/executions/${encodeURIComponent(execution.id)}/confirmations`,
         {
@@ -235,7 +325,8 @@ export function ConfirmationPanel({
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             action: gate.action,
-            configVersion: execution.configVersion
+            configVersion: execution.configVersion,
+            agentId: expected.agentId
           })
         }
       );
@@ -269,8 +360,10 @@ export function ConfirmationPanel({
         return;
       }
       issuedGrant.current = grant;
+      expectedConnection.current = expected;
+      setIssuedConnectionSnapshot(serializeConnection(expected));
       scheduleExpiry(grant);
-      await deliver(grant);
+      await deliver(grant, expected);
     } catch {
       if (mounted.current) {
         setSubmission({
@@ -316,13 +409,13 @@ export function ConfirmationPanel({
         description={<Text weight="semibold">{gate.title}</Text>}
       />
       <Text>{gate.detail}</Text>
-      {!bridgeMatchesExecution ? (
+      {!bridgeMatchesIssuedGrant ? (
         <Text role="status">本地代理桥未连接</Text>
       ) : null}
       <Button
         appearance="primary"
         disabled={
-          !bridgeMatchesExecution ||
+          !bridgeMatchesIssuedGrant ||
           inProgress ||
           submission.state === "acknowledged"
         }
@@ -364,16 +457,53 @@ function subscribeDisconnected(): () => void {
 }
 
 function serializeConnection(connection: LocalAgentBridgeConnection): string {
-  return `${connection.connected ? "1" : "0"}:${connection.agentId ?? ""}`;
+  return JSON.stringify([
+    connection.connected,
+    connection.agentId,
+    connection.sessionId,
+    connection.executionId
+  ]);
 }
 
 function deserializeConnection(value: string): LocalAgentBridgeConnection {
-  const separator = value.indexOf(":");
-  const agentId = value.slice(separator + 1);
+  const [connected, agentId, sessionId, executionId] = JSON.parse(value) as [
+    boolean,
+    string | null,
+    string | null,
+    string | null
+  ];
   return {
-    connected: value.slice(0, separator) === "1",
-    agentId: agentId || null
+    connected,
+    agentId,
+    sessionId,
+    executionId
   };
+}
+
+function isConnectionForExecution(
+  connection: LocalAgentBridgeConnection,
+  execution: ExecutionSummary
+): boolean {
+  return (
+    connection.connected &&
+    Boolean(connection.agentId) &&
+    Boolean(connection.sessionId) &&
+    connection.executionId === execution.id &&
+    Boolean(execution.agentId) &&
+    connection.agentId === execution.agentId
+  );
+}
+
+function sameConnection(
+  left: LocalAgentBridgeConnection,
+  right: LocalAgentBridgeConnection
+): boolean {
+  return (
+    left.connected === right.connected &&
+    left.agentId === right.agentId &&
+    left.sessionId === right.sessionId &&
+    left.executionId === right.executionId
+  );
 }
 
 function millisecondsUntil(expiresAt: string): number {

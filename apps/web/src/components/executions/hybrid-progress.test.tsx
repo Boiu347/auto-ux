@@ -30,7 +30,12 @@ const execution: ExecutionSummary = {
 };
 
 const connectedBridge = {
-  getConnection: () => ({ connected: true, agentId: "agent-owner" }),
+  getConnection: () => ({
+    connected: true,
+    agentId: "agent-owner",
+    sessionId: "session-owner",
+    executionId: "EX-1"
+  }),
   subscribe: () => () => undefined,
   deliverConfirmation: vi.fn().mockResolvedValue({ acknowledged: true })
 };
@@ -331,6 +336,142 @@ describe("HybridProgress", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("disables confirmation when the authoritative summary has no current lock agent", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const waitingEvent = checkpoint(
+      "publish.confirm",
+      "waiting_confirmation",
+      "publish_confirm"
+    );
+
+    render(
+      <HybridProgress
+        execution={{
+          ...execution,
+          status: "waiting_confirmation",
+          phase: "publish_confirm",
+          agentId: null,
+          agentHeartbeatAt: null
+        }}
+        initialEvents={[persisted("cursor:opaque:publish", waitingEvent)]}
+        localAgentBridge={connectedBridge}
+      />
+    );
+
+    expect(screen.getByText("无持久化记录")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认发布" })).toBeDisabled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "disconnects",
+      {
+        connected: false,
+        agentId: null,
+        sessionId: null,
+        executionId: null
+      }
+    ],
+    [
+      "switches agent",
+      {
+        connected: true,
+        agentId: "agent-other",
+        sessionId: "session-other",
+        executionId: "EX-1"
+      }
+    ]
+  ] as const)(
+    "retains one token without wrong delivery when the bridge %s during POST",
+    async (_label, changedConnection) => {
+      const waitingEvent = checkpoint(
+        "publish.confirm",
+        "waiting_confirmation",
+        "publish_confirm"
+      );
+      const waitingSummary: ExecutionSummary = {
+        ...execution,
+        status: "waiting_confirmation",
+        phase: "publish_confirm"
+      };
+      const issued = {
+        confirmationId: "confirm:0123456789abcdef",
+        action: "publish" as const,
+        executionId: "EX-1",
+        configVersion: 7,
+        token: `confirm_token:${"3".repeat(64)}`,
+        expiresAt: "2099-07-30T08:05:00.000Z"
+      };
+      const originalConnection = {
+        connected: true,
+        agentId: "agent-owner",
+        sessionId: "session-owner",
+        executionId: "EX-1"
+      } as const;
+      const bridge = mutableBridge(originalConnection);
+      const post = deferred<Response>();
+      const fetchMock = vi.fn(
+        (url: string | URL | Request, init?: RequestInit) => {
+          if (String(url).endsWith("/confirmations")) {
+            return post.promise;
+          }
+          expect(init?.method).toBeUndefined();
+          return Promise.resolve(summaryResponse(waitingSummary, waitingEvent));
+        }
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(
+        <HybridProgress
+          execution={waitingSummary}
+          initialEvents={[persisted("cursor:opaque:publish", waitingEvent)]}
+          localAgentBridge={bridge}
+        />
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "确认发布" }));
+      await waitFor(() =>
+        expect(
+          fetchMock.mock.calls.filter(([url]) =>
+            String(url).endsWith("/confirmations")
+          )
+        ).toHaveLength(1)
+      );
+      act(() => bridge.setConnection(changedConnection));
+      post.resolve(
+        new Response(JSON.stringify({ confirmation: issued }), {
+          status: 201,
+          headers: { "content-type": "application/json" }
+        })
+      );
+
+      expect(
+        await screen.findByText(/本地代理连接已变化/)
+      ).toBeInTheDocument();
+      expect(bridge.deliverConfirmation).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole("button", { name: "重试交付确认" })
+      ).toBeDisabled();
+
+      act(() => bridge.setConnection(originalConnection));
+      const retry = screen.getByRole("button", { name: "重试交付确认" });
+      expect(retry).toBeEnabled();
+      fireEvent.click(retry);
+
+      expect(
+        await screen.findByText("本地代理已确认接收")
+      ).toBeInTheDocument();
+      expect(bridge.deliverConfirmation).toHaveBeenCalledWith(issued);
+      expect(
+        fetchMock.mock.calls.filter(([url]) =>
+          String(url).endsWith("/confirmations")
+        )
+      ).toHaveLength(1);
+    }
+  );
+
   it("retries delivery with the same in-memory token and clears it after ACK", async () => {
     const issued = {
       confirmationId: "confirm:0123456789abcdef",
@@ -340,29 +481,34 @@ describe("HybridProgress", () => {
       token: `confirm_token:${"1".repeat(64)}`,
       expiresAt: "2099-07-30T08:05:00.000Z"
     };
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ confirmation: issued }), {
-        status: 201,
-        headers: { "content-type": "application/json" }
-      })
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    connectedBridge.deliverConfirmation
-      .mockRejectedValueOnce(new Error("bridge offline"))
-      .mockResolvedValueOnce({ acknowledged: true });
     const waitingEvent = checkpoint(
       "publish.confirm",
       "waiting_confirmation",
       "publish_confirm"
     );
+    const waitingSummary = {
+      ...execution,
+      status: "waiting_confirmation" as const,
+      phase: "publish_confirm" as const
+    };
+    const fetchMock = vi.fn((url: string | URL | Request) =>
+      Promise.resolve(
+        String(url).endsWith("/confirmations")
+          ? new Response(JSON.stringify({ confirmation: issued }), {
+              status: 201,
+              headers: { "content-type": "application/json" }
+            })
+          : summaryResponse(waitingSummary, waitingEvent)
+      )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    connectedBridge.deliverConfirmation
+      .mockRejectedValueOnce(new Error("bridge offline"))
+      .mockResolvedValueOnce({ acknowledged: true });
 
     render(
       <HybridProgress
-        execution={{
-          ...execution,
-          status: "waiting_confirmation",
-          phase: "publish_confirm"
-        }}
+        execution={waitingSummary}
         initialEvents={[persisted("cursor:opaque:publish", waitingEvent)]}
         localAgentBridge={connectedBridge}
       />
@@ -372,7 +518,7 @@ describe("HybridProgress", () => {
     expect(
       await screen.findByRole("button", { name: "重试交付确认" })
     ).toBeEnabled();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(confirmationPostCalls(fetchMock)).toHaveLength(1);
     expect(connectedBridge.deliverConfirmation).toHaveBeenNthCalledWith(
       1,
       issued
@@ -381,7 +527,7 @@ describe("HybridProgress", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "重试交付确认" }));
     expect(await screen.findByText("本地代理已确认接收")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(confirmationPostCalls(fetchMock)).toHaveLength(1);
     expect(connectedBridge.deliverConfirmation).toHaveBeenNthCalledWith(
       2,
       issued
@@ -390,23 +536,30 @@ describe("HybridProgress", () => {
 
   it("recovers from a pre-issue network failure and prevents double submission", async () => {
     const pending = deferred<Response>();
-    const fetchMock = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("offline"))
-      .mockReturnValueOnce(pending.promise);
-    vi.stubGlobal("fetch", fetchMock);
+    let postCount = 0;
     const waitingEvent = checkpoint(
       "publish.confirm",
       "waiting_confirmation",
       "publish_confirm"
     );
+    const waitingSummary = {
+      ...execution,
+      status: "waiting_confirmation" as const,
+      phase: "publish_confirm" as const
+    };
+    const fetchMock = vi.fn((url: string | URL | Request) => {
+      if (!String(url).endsWith("/confirmations")) {
+        return Promise.resolve(summaryResponse(waitingSummary, waitingEvent));
+      }
+      postCount += 1;
+      return postCount === 1
+        ? Promise.reject(new Error("offline"))
+        : pending.promise;
+    });
+    vi.stubGlobal("fetch", fetchMock);
     render(
       <HybridProgress
-        execution={{
-          ...execution,
-          status: "waiting_confirmation",
-          phase: "publish_confirm"
-        }}
+        execution={waitingSummary}
         initialEvents={[persisted("cursor:opaque:publish", waitingEvent)]}
         localAgentBridge={connectedBridge}
       />
@@ -422,7 +575,9 @@ describe("HybridProgress", () => {
       fireEvent.click(retry);
       fireEvent.click(retry);
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await waitFor(() =>
+      expect(confirmationPostCalls(fetchMock)).toHaveLength(2)
+    );
   });
 
   it("renders loading, empty, and load-error states explicitly", () => {
@@ -450,23 +605,36 @@ describe("HybridProgress", () => {
       "waiting_confirmation",
       "publish_confirm"
     );
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ code: "CONFIRMATION_CONFIG_MISMATCH" }),
-          {
-            status: 409,
-            headers: { "content-type": "application/json" }
-          }
-        )
-      )
-      .mockResolvedValueOnce(
-        summaryResponse(
-          { ...execution, status: "running", phase: "publish_verify" },
-          checkpoint("publish.verify", "running", "publish_verify")
-        )
+    let summaryReads = 0;
+    const fetchMock = vi.fn((url: string | URL | Request) => {
+      if (String(url).endsWith("/confirmations")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ code: "CONFIRMATION_CONFIG_MISMATCH" }),
+            {
+              status: 409,
+              headers: { "content-type": "application/json" }
+            }
+          )
+        );
+      }
+      summaryReads += 1;
+      return Promise.resolve(
+        summaryReads === 1
+          ? summaryResponse(
+              {
+                ...execution,
+                status: "waiting_confirmation",
+                phase: "publish_confirm"
+              },
+              waitingEvent
+            )
+          : summaryResponse(
+              { ...execution, status: "running", phase: "publish_verify" },
+              checkpoint("publish.verify", "running", "publish_verify")
+            )
       );
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     render(
@@ -489,12 +657,16 @@ describe("HybridProgress", () => {
       ).not.toBeInTheDocument()
     );
     expect(screen.queryByText("发布成功")).not.toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(confirmationPostCalls(fetchMock)).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/executions/EX-1/confirmations",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ action: "publish", configVersion: 7 })
+        body: JSON.stringify({
+          action: "publish",
+          configVersion: 7,
+          agentId: "agent-owner"
+        })
       })
     );
   });
@@ -513,39 +685,34 @@ describe("HybridProgress", () => {
       token: `confirm_token:${"2".repeat(64)}`,
       expiresAt: "2099-07-30T08:05:00.000Z"
     };
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ code: "CONFIRMATION_INVALID" }), {
-          status: 409,
-          headers: { "content-type": "application/json" }
-        })
-      )
-      .mockResolvedValueOnce(
-        summaryResponse(
-          {
-            ...execution,
-            status: "waiting_confirmation",
-            phase: "publish_confirm"
-          },
-          waitingEvent
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ confirmation: issued }), {
-          status: 201,
-          headers: { "content-type": "application/json" }
-        })
+    const waitingSummary = {
+      ...execution,
+      status: "waiting_confirmation" as const,
+      phase: "publish_confirm" as const
+    };
+    let postCount = 0;
+    const fetchMock = vi.fn((url: string | URL | Request) => {
+      if (!String(url).endsWith("/confirmations")) {
+        return Promise.resolve(summaryResponse(waitingSummary, waitingEvent));
+      }
+      postCount += 1;
+      return Promise.resolve(
+        postCount === 1
+          ? new Response(JSON.stringify({ code: "CONFIRMATION_INVALID" }), {
+              status: 409,
+              headers: { "content-type": "application/json" }
+            })
+          : new Response(JSON.stringify({ confirmation: issued }), {
+              status: 201,
+              headers: { "content-type": "application/json" }
+            })
       );
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     render(
       <HybridProgress
-        execution={{
-          ...execution,
-          status: "waiting_confirmation",
-          phase: "publish_confirm"
-        }}
+        execution={waitingSummary}
         initialEvents={[persisted("cursor:opaque:publish", waitingEvent)]}
         localAgentBridge={connectedBridge}
       />
@@ -560,7 +727,7 @@ describe("HybridProgress", () => {
 
     fireEvent.click(retry);
     expect(await screen.findByText("本地代理已确认接收")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(confirmationPostCalls(fetchMock)).toHaveLength(2);
     expect(connectedBridge.deliverConfirmation).toHaveBeenCalledWith(issued);
   });
 });
@@ -580,6 +747,38 @@ function deferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+type BridgeConnection = {
+  connected: boolean;
+  agentId: string | null;
+  sessionId: string | null;
+  executionId: string | null;
+};
+
+function mutableBridge(initial: BridgeConnection) {
+  let connection = initial;
+  const listeners = new Set<() => void>();
+  return {
+    getConnection: () => connection,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    deliverConfirmation: vi.fn().mockResolvedValue({ acknowledged: true }),
+    setConnection(next: BridgeConnection) {
+      connection = next;
+      for (const listener of listeners) {
+        listener();
+      }
+    }
+  };
+}
+
+function confirmationPostCalls(fetchMock: ReturnType<typeof vi.fn>) {
+  return fetchMock.mock.calls.filter(([url]) =>
+    String(url).endsWith("/confirmations")
+  );
 }
 
 function summaryResponse(

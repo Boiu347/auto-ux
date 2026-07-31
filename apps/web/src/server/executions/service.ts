@@ -67,7 +67,8 @@ export const AppendExecutionEventRequestSchema = z
 export const CreateConfirmationRequestSchema = z
   .object({
     action: ConfirmationActionSchema,
-    configVersion: z.number().int().positive()
+    configVersion: z.number().int().positive(),
+    agentId: IdentifierSchema
   })
   .strict();
 
@@ -217,7 +218,8 @@ export class ExecutionService {
   async issueCreatorConfirmation(
     executionId: string,
     action: ConfirmationAction,
-    configVersion: number
+    configVersion: number,
+    agentId: string
   ): Promise<{
     action: ConfirmationAction;
     executionId: string;
@@ -235,6 +237,10 @@ export class ExecutionService {
     }
     if (execution.status !== "waiting_confirmation") {
       throw new ExecutionServiceError("CONFIRMATION_ACTION_MISMATCH", 409);
+    }
+    const heartbeat = await this.store.findExecutionAgentHeartbeat(executionId);
+    if (!heartbeat || heartbeat.agentId !== agentId) {
+      throw new ExecutionServiceError("EXECUTION_LOCK_MISMATCH", 409);
     }
 
     const confirmationId = `confirm:${this.randomHex(16)}`;

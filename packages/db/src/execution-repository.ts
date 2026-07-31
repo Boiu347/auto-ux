@@ -177,27 +177,19 @@ export class PrismaExecutionRepository implements ExecutionRepository {
   async findExecutionAgentHeartbeat(
     executionId: string
   ): Promise<ExecutionAgentHeartbeat | null> {
-    const execution = await this.client.execution.findFirst({
-      where: {
-        id: executionId,
-        userId: this.scope.userId,
-        workspaceId: this.scope.workspaceId
-      },
-      select: { executionLockAgentId: true }
-    });
-    if (!execution?.executionLockAgentId) {
-      return null;
-    }
-    const agent = await this.client.localAgent.findFirst({
-      where: {
-        id: execution.executionLockAgentId,
-        workspaceId: this.scope.workspaceId
-      },
-      select: { id: true, lastHeartbeatAt: true }
-    });
-    return agent
-      ? { agentId: agent.id, lastHeartbeatAt: agent.lastHeartbeatAt }
-      : null;
+    const agents = await this.client.$queryRaw<ExecutionAgentHeartbeat[]>`
+      SELECT agent."id" AS "agentId",
+             agent."lastHeartbeatAt" AS "lastHeartbeatAt"
+      FROM "Execution" AS execution
+      INNER JOIN "LocalAgent" AS agent
+        ON agent."id" = execution."executionLockAgentId"
+       AND agent."workspaceId" = execution."workspaceId"
+      WHERE execution."id" = ${executionId}
+        AND execution."userId" = ${this.scope.userId}
+        AND execution."workspaceId" = ${this.scope.workspaceId}
+        AND execution."executionLockExpiresAt" > CURRENT_TIMESTAMP
+      LIMIT 1`;
+    return agents[0] ?? null;
   }
 
   async appendStepEvent(event: ExecutionEvent): Promise<void> {

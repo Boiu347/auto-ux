@@ -39,7 +39,8 @@ export function createConfirmationHandler(
       ).issueCreatorConfirmation(
         executionId,
         body.action,
-        body.configVersion
+        body.configVersion,
+        body.agentId
       );
       return NextResponse.json({ confirmation }, { status: 201 });
     } catch (error) {

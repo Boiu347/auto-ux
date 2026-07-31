@@ -88,6 +88,10 @@ describe("execution events API", () => {
       status: "waiting_confirmation",
       phase: "publish_confirm"
     };
+    store.agentHeartbeat = {
+      agentId: "agent-owner",
+      lastHeartbeatAt: new Date("2026-07-30T08:00:00.000Z")
+    };
     const item = createExecutionItemHandlers(resolve(store), authenticate);
     const events = createEventsHandlers(resolve(store), authenticate);
     const confirmation = createConfirmationHandler(resolve(store), authenticate);
@@ -116,7 +120,11 @@ describe("execution events API", () => {
     const issued = await confirmation(
       browserRequest("http://localhost/api/executions/EX-1/confirmations", {
         method: "POST",
-        body: JSON.stringify({ action: "publish", configVersion: 1 })
+        body: JSON.stringify({
+          action: "publish",
+          configVersion: 1,
+          agentId: "agent-owner"
+        })
       }),
       context("EX-1")
     );
@@ -334,6 +342,22 @@ describe("execution events API", () => {
     });
   });
 
+  it("returns no current agent facts when the scoped lock lookup is expired", async () => {
+    const store = new MemoryExecutionStore();
+    store.execution = executionRecord();
+    store.agentHeartbeat = null;
+    const item = createExecutionItemHandlers(resolve(store));
+
+    const response = await item.GET(
+      request("http://localhost/api/executions/EX-1"),
+      context("EX-1")
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      execution: { agentId: null, agentHeartbeatAt: null }
+    });
+  });
+
   it("enforces tenant ownership for SSE before opening the stream", async () => {
     const store = new MemoryExecutionStore();
     store.execution = executionRecord();
@@ -384,7 +408,11 @@ describe("execution events API", () => {
         "http://localhost/api/executions/EX-1/confirmations",
         {
           method: "POST",
-          body: JSON.stringify({ action: "publish", configVersion: 1 })
+          body: JSON.stringify({
+            action: "publish",
+            configVersion: 1,
+            agentId: "agent-other"
+          })
         }
       ),
       context("EX-1")
@@ -539,11 +567,16 @@ describe("execution events API", () => {
           phase: transitionCase.currentPhase
         };
         store.lockAgentId = "agent-owner";
+        store.agentHeartbeat = {
+          agentId: "agent-owner",
+          lastHeartbeatAt: new Date("2026-07-30T08:00:00.000Z")
+        };
         const service = new ExecutionService(store);
         const proof = await service.issueCreatorConfirmation(
           "EX-1",
           transitionCase.action,
-          1
+          1,
+          "agent-owner"
         );
 
         await expect(
@@ -574,6 +607,10 @@ describe("execution events API", () => {
       status: "waiting_confirmation",
       phase: "publish_confirm"
     };
+    store.agentHeartbeat = {
+      agentId: "agent-owner",
+      lastHeartbeatAt: new Date("2026-07-30T08:00:00.000Z")
+    };
     const confirmation = createConfirmationHandler(resolve(store));
 
     const wrongAction = await confirmation(
@@ -581,7 +618,8 @@ describe("execution events API", () => {
         method: "POST",
         body: JSON.stringify({
           action: "import_numbers",
-          configVersion: 1
+          configVersion: 1,
+          agentId: "agent-owner"
         })
       }),
       context("EX-1")
@@ -593,7 +631,8 @@ describe("execution events API", () => {
         method: "POST",
         body: JSON.stringify({
           action: ["publish", "import_numbers"],
-          configVersion: 1
+          configVersion: 1,
+          agentId: "agent-owner"
         })
       }),
       context("EX-1")
@@ -603,7 +642,11 @@ describe("execution events API", () => {
     const stale = await confirmation(
       request("http://localhost/api/executions/EX-1/confirmations", {
         method: "POST",
-        body: JSON.stringify({ action: "publish", configVersion: 2 })
+        body: JSON.stringify({
+          action: "publish",
+          configVersion: 2,
+          agentId: "agent-owner"
+        })
       }),
       context("EX-1")
     );
@@ -612,7 +655,11 @@ describe("execution events API", () => {
     const issued = await confirmation(
       request("http://localhost/api/executions/EX-1/confirmations", {
         method: "POST",
-        body: JSON.stringify({ action: "publish", configVersion: 1 })
+        body: JSON.stringify({
+          action: "publish",
+          configVersion: 1,
+          agentId: "agent-owner"
+        })
       }),
       context("EX-1")
     );
@@ -639,6 +686,67 @@ describe("execution events API", () => {
     );
   });
 
+  it("refuses to issue a confirmation for a bridge agent without the current lock", async () => {
+    const store = new MemoryExecutionStore();
+    store.execution = {
+      ...executionRecord(),
+      status: "waiting_confirmation",
+      phase: "publish_confirm"
+    };
+    store.agentHeartbeat = {
+      agentId: "agent-owner",
+      lastHeartbeatAt: new Date("2026-07-30T08:00:00.000Z")
+    };
+    const confirmation = createConfirmationHandler(resolve(store));
+
+    const response = await confirmation(
+      request("http://localhost/api/executions/EX-1/confirmations", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "publish",
+          configVersion: 1,
+          agentId: "agent-other"
+        })
+      }),
+      context("EX-1")
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      code: "EXECUTION_LOCK_MISMATCH"
+    });
+    expect(store.confirmations).toHaveLength(0);
+  });
+
+  it("refuses to issue a confirmation when no unexpired lock agent is authoritative", async () => {
+    const store = new MemoryExecutionStore();
+    store.execution = {
+      ...executionRecord(),
+      status: "waiting_confirmation",
+      phase: "publish_confirm"
+    };
+    store.agentHeartbeat = null;
+    const confirmation = createConfirmationHandler(resolve(store));
+
+    const response = await confirmation(
+      request("http://localhost/api/executions/EX-1/confirmations", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "publish",
+          configVersion: 1,
+          agentId: "agent-owner"
+        })
+      }),
+      context("EX-1")
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      code: "EXECUTION_LOCK_MISMATCH"
+    });
+    expect(store.confirmations).toHaveLength(0);
+  });
+
   it("atomically consumes one durable creator confirmation for one event", async () => {
     const store = new MemoryExecutionStore();
     store.execution = {
@@ -647,12 +755,20 @@ describe("execution events API", () => {
       phase: "publish_confirm"
     };
     store.lockAgentId = "agent-owner";
+    store.agentHeartbeat = {
+      agentId: "agent-owner",
+      lastHeartbeatAt: new Date("2026-07-30T08:00:00.000Z")
+    };
     const confirmation = createConfirmationHandler(resolve(store));
     const events = createEventsHandlers(resolve(store));
     const issued = await confirmation(
       request("http://localhost/api/executions/EX-1/confirmations", {
         method: "POST",
-        body: JSON.stringify({ action: "publish", configVersion: 1 })
+        body: JSON.stringify({
+          action: "publish",
+          configVersion: 1,
+          agentId: "agent-owner"
+        })
       }),
       context("EX-1")
     );
@@ -721,12 +837,20 @@ describe("execution events API", () => {
       phase: "publish_confirm"
     };
     store.lockAgentId = "agent-owner";
+    store.agentHeartbeat = {
+      agentId: "agent-owner",
+      lastHeartbeatAt: new Date("2026-07-30T08:00:00.000Z")
+    };
     const confirmation = createConfirmationHandler(resolve(store));
     const events = createEventsHandlers(resolve(store));
     const issued = await confirmation(
       request("http://localhost/api/executions/EX-1/confirmations", {
         method: "POST",
-        body: JSON.stringify({ action: "publish", configVersion: 1 })
+        body: JSON.stringify({
+          action: "publish",
+          configVersion: 1,
+          agentId: "agent-owner"
+        })
       }),
       context("EX-1")
     );

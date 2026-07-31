@@ -128,6 +128,45 @@ describe("PrismaExecutionRepository", () => {
     ).resolves.toBeNull();
   });
 
+  it("returns no current agent once PostgreSQL considers the lock expired", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+    const heartbeatAt = new Date("2026-07-30T08:00:00.000Z");
+    await prisma.localAgent.create({
+      data: {
+        id: "agent-expiring",
+        workspaceId: "W-1",
+        version: "1.0.0",
+        capabilities: {},
+        lastHeartbeatAt: heartbeatAt
+      }
+    });
+    await prisma.$executeRaw`
+      UPDATE "Execution"
+      SET "executionLockAgentId" = 'agent-expiring',
+          "executionLockExpiresAt" = CURRENT_TIMESTAMP + INTERVAL '1 minute'
+      WHERE "id" = ${execution.id}`;
+
+    await expect(
+      repository.findExecutionAgentHeartbeat(execution.id)
+    ).resolves.toEqual({
+      agentId: "agent-expiring",
+      lastHeartbeatAt: heartbeatAt
+    });
+
+    await prisma.$executeRaw`
+      UPDATE "Execution"
+      SET "executionLockExpiresAt" = CURRENT_TIMESTAMP - INTERVAL '1 second'
+      WHERE "id" = ${execution.id}`;
+
+    await expect(
+      repository.findExecutionAgentHeartbeat(execution.id)
+    ).resolves.toBeNull();
+  });
+
   it("allows exactly one winner under concurrent lock contention", async () => {
     const execution = await repository.create({
       userId: "U-1",

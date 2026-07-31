@@ -12,6 +12,8 @@ export interface LocalAgentConfirmationDelivery {
 export interface LocalAgentBridgeConnection {
   connected: boolean;
   agentId: string | null;
+  sessionId: string | null;
+  executionId: string | null;
 }
 
 export interface LocalAgentBridge {
