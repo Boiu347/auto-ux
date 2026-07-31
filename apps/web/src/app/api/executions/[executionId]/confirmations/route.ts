@@ -16,13 +16,17 @@ type RouteContext = {
 };
 
 type ResolveService = (user: CurrentUser) => ExecutionService;
+type Authenticate = (request: Request) => CurrentUser | null;
 
-export function createConfirmationHandler(resolveService: ResolveService) {
+export function createConfirmationHandler(
+  resolveService: ResolveService,
+  authenticate: Authenticate = getCurrentUser
+) {
   return async function POST(
     request: Request,
     routeContext: RouteContext
   ): Promise<Response> {
-    const user = getCurrentUser(request);
+    const user = authenticate(request);
     if (!user) {
       return errorResponse("UNAUTHENTICATED", 401);
     }

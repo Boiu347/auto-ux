@@ -15,11 +15,15 @@ type RouteContext = {
 };
 
 type ResolveService = (user: CurrentUser) => ExecutionService;
+type Authenticate = (request: Request) => CurrentUser | null;
 
-export function createExecutionItemHandlers(resolveService: ResolveService) {
+export function createExecutionItemHandlers(
+  resolveService: ResolveService,
+  authenticate: Authenticate = getCurrentUser
+) {
   return {
     async GET(request: Request, routeContext: RouteContext): Promise<Response> {
-      const user = getCurrentUser(request);
+      const user = authenticate(request);
       if (!user) {
         return NextResponse.json(
           { code: "UNAUTHENTICATED" },

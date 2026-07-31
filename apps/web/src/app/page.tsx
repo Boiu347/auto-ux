@@ -8,6 +8,7 @@ import {
 } from "@fluentui/react-components";
 
 import { ExecutionList } from "../components/executions/execution-list";
+import { DevelopmentSessionForm } from "../components/auth/development-session-form";
 
 export default function HomePage() {
   return (
@@ -20,6 +21,9 @@ export default function HomePage() {
             安全地准备、确认并跟踪每次外呼机器人配置。
           </Text>
         </header>
+        {process.env.NODE_ENV !== "production" ? (
+          <DevelopmentSessionForm />
+        ) : null}
         <ExecutionList executions={[]} />
       </main>
     </FluentProvider>

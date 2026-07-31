@@ -15,6 +15,7 @@ import {
   type AppendStepEventResult,
   type ConfirmationClaim,
   type ConfirmationRecord,
+  type ExecutionAgentHeartbeat,
   type ExecutionRecord,
   type PersistedStepEvent,
   type RepositoryScope
@@ -81,6 +82,9 @@ export interface ExecutionDataStore {
     configVersion: number;
   }): Promise<ExecutionRecord>;
   findExecution(executionId: string): Promise<ExecutionRecord | null>;
+  findExecutionAgentHeartbeat(
+    executionId: string
+  ): Promise<ExecutionAgentHeartbeat | null>;
   appendEventForAgent(input: {
     agentId: string;
     event: ExecutionEvent;
@@ -138,12 +142,25 @@ export class ExecutionService {
   }
 
   async getExecution(executionId: string): Promise<{
-    execution: ExecutionRecord;
+    execution: ExecutionRecord & {
+      agentId: string | null;
+      agentHeartbeatAt: Date | null;
+    };
     events: PersistedStepEvent[];
   }> {
     const execution = await this.requireExecution(executionId);
-    const events = await this.store.listEventsAfter(executionId);
-    return { execution, events };
+    const [events, heartbeat] = await Promise.all([
+      this.store.listEventsAfter(executionId),
+      this.store.findExecutionAgentHeartbeat(executionId)
+    ]);
+    return {
+      execution: {
+        ...execution,
+        agentId: heartbeat?.agentId ?? null,
+        agentHeartbeatAt: heartbeat?.lastHeartbeatAt ?? null
+      },
+      events
+    };
   }
 
   async appendEvent(
@@ -414,6 +431,12 @@ class PrismaExecutionDataStore implements ExecutionDataStore {
       this.scope.userId,
       this.scope.workspaceId
     );
+  }
+
+  findExecutionAgentHeartbeat(
+    executionId: string
+  ): Promise<ExecutionAgentHeartbeat | null> {
+    return this.repository.findExecutionAgentHeartbeat(executionId);
   }
 
   appendEventForAgent(input: {

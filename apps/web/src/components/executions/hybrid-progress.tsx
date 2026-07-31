@@ -16,11 +16,15 @@ import {
   webDarkTheme,
   webLightTheme
 } from "@fluentui/react-components";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ConfirmationPanel } from "./confirmation-panel";
 import { CurrentActionCard } from "./current-action-card";
 import { EvidenceCard } from "./evidence-card";
+import {
+  resolveLocalAgentBridge,
+  type LocalAgentBridge
+} from "./local-agent-bridge";
 
 export interface ExecutionSummary {
   id: string;
@@ -29,7 +33,8 @@ export interface ExecutionSummary {
   phase: ExecutionPhase;
   targetPolicy: "create_only";
   updatedAt: string;
-  agentHeartbeatAt?: string | null;
+  agentId: string | null;
+  agentHeartbeatAt: string | null;
 }
 
 export interface PersistedExecutionEvent {
@@ -49,13 +54,15 @@ export function HybridProgress({
   execution: initialExecution,
   initialEvents = [],
   loading = false,
-  loadError
+  loadError,
+  localAgentBridge
 }: {
   executionId?: string;
   execution?: ExecutionSummary;
   initialEvents?: InitialEvent[];
   loading?: boolean;
   loadError?: string;
+  localAgentBridge?: LocalAgentBridge | null;
 }) {
   const [execution, setExecution] = useState(initialExecution);
   const [events, setEvents] = useState(() => normalizeEvents(initialEvents));
@@ -68,6 +75,25 @@ export function HybridProgress({
   const [isDark, setIsDark] = useState(false);
   const latestCursor = useRef(lastPersistedCursor(normalizeEvents(initialEvents)));
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshController = useRef<AbortController | null>(null);
+  const refreshSequence = useRef(0);
+  const mounted = useRef(false);
+  const seenEvents = useRef(
+    new Set(normalizeEvents(initialEvents).map(persistedEventKey))
+  );
+  const bridge =
+    localAgentBridge === undefined
+      ? resolveLocalAgentBridge()
+      : localAgentBridge;
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      refreshSequence.current += 1;
+      refreshController.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     const query =
@@ -83,40 +109,78 @@ export function HybridProgress({
     return () => query.removeEventListener?.("change", updateTheme);
   }, []);
 
+  const refreshSummary = useCallback(
+    async (showLoading = false): Promise<ExecutionSummary | undefined> => {
+      const id = initialExecution?.id ?? executionId;
+      if (!id) {
+        return undefined;
+      }
+      const sequence = refreshSequence.current + 1;
+      refreshSequence.current = sequence;
+      refreshController.current?.abort();
+      const controller = new AbortController();
+      refreshController.current = controller;
+      if (showLoading) {
+        setRequestState("loading");
+        setRequestError(undefined);
+      }
+      try {
+        const response = await fetch(
+          `/api/executions/${encodeURIComponent(id)}`,
+          {
+            signal: controller.signal,
+            headers: { accept: "application/json" }
+          }
+        );
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const payload = (await response.json()) as {
+          execution: ExecutionSummary;
+          events: PersistedExecutionEvent[];
+        };
+        if (!mounted.current || sequence !== refreshSequence.current) {
+          return undefined;
+        }
+        const normalized = normalizeEvents(payload.events);
+        setExecution(payload.execution);
+        setEvents((current) => mergeEvents(current, normalized));
+        for (const persisted of normalized) {
+          seenEvents.current.add(persistedEventKey(persisted));
+        }
+        const cursor = lastPersistedCursor(normalized);
+        if (cursor) {
+          latestCursor.current = cursor;
+        }
+        setRequestState("idle");
+        setRequestError(undefined);
+        return payload.execution;
+      } catch (error) {
+        if (
+          controller.signal.aborted ||
+          (error instanceof DOMException && error.name === "AbortError")
+        ) {
+          return undefined;
+        }
+        if (showLoading && mounted.current) {
+          setRequestError("无法读取执行记录");
+          setRequestState("error");
+        }
+        throw error;
+      }
+    },
+    [executionId, initialExecution?.id]
+  );
+
   useEffect(() => {
     if (initialExecution || !executionId) {
       return;
     }
-    const controller = new AbortController();
-    fetch(`/api/executions/${encodeURIComponent(executionId)}`, {
-      signal: controller.signal,
-      headers: { accept: "application/json" }
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        return (await response.json()) as {
-          execution: ExecutionSummary;
-          events: PersistedExecutionEvent[];
-        };
-      })
-      .then((payload) => {
-        const normalized = normalizeEvents(payload.events);
-        setExecution(payload.execution);
-        setEvents(normalized);
-        latestCursor.current = lastPersistedCursor(normalized);
-        setRequestState("idle");
-      })
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "AbortError") {
-          return;
-        }
-        setRequestError("无法读取执行记录");
-        setRequestState("error");
-      });
-    return () => controller.abort();
-  }, [executionId, initialExecution]);
+    const timer = setTimeout(() => {
+      void refreshSummary(true).catch(() => undefined);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [executionId, initialExecution, refreshSummary]);
 
   useEffect(() => {
     const id = execution?.id ?? executionId;
@@ -150,13 +214,18 @@ export function HybridProgress({
         try {
           const parsed = JSON.parse(event.data) as ExecutionEvent;
           const cursor = event.lastEventId || undefined;
+          const persisted = { cursor, event: parsed };
+          const key = persistedEventKey(persisted);
+          if (seenEvents.current.has(key)) {
+            return;
+          }
+          seenEvents.current.add(key);
           if (cursor) {
             latestCursor.current = cursor;
           }
-          setEvents((current) =>
-            appendUnique(current, { cursor, event: parsed })
-          );
+          setEvents((current) => appendUnique(current, persisted));
           setConnection("connected");
+          void refreshSummary().catch(() => undefined);
         } catch {
           setConnection("disconnected");
         }
@@ -176,7 +245,14 @@ export function HybridProgress({
         clearTimeout(reconnectTimer.current);
       }
     };
-  }, [execution?.id, executionId, loadError, loading, requestState]);
+  }, [
+    execution?.id,
+    executionId,
+    loadError,
+    loading,
+    refreshSummary,
+    requestState
+  ]);
 
   const currentEvent = events.at(-1)?.event;
   const lastCheckpoint = [...events]
@@ -242,7 +318,13 @@ export function HybridProgress({
               event={currentEvent}
               lastCheckpoint={lastCheckpoint}
             />
-            <ConfirmationPanel execution={execution} event={currentEvent} />
+            <ConfirmationPanel
+              key={`${execution.id}:${execution.configVersion}:${execution.phase}:${execution.status}`}
+              execution={execution}
+              event={currentEvent}
+              bridge={bridge}
+              refreshSummary={refreshSummary}
+            />
           </section>
         </div>
       </main>
@@ -351,6 +433,20 @@ function appendUnique(
     return eventKey(candidate.event) === eventKey(item.event);
   });
   return duplicate ? current : [...current, candidate];
+}
+
+function mergeEvents(
+  current: Array<{ cursor?: string; event: ExecutionEvent }>,
+  candidates: Array<{ cursor?: string; event: ExecutionEvent }>
+) {
+  return candidates.reduce(appendUnique, current);
+}
+
+function persistedEventKey(event: {
+  cursor?: string;
+  event: ExecutionEvent;
+}): string {
+  return event.cursor ? `cursor:${event.cursor}` : `event:${eventKey(event.event)}`;
 }
 
 function eventKey(event: ExecutionEvent): string {

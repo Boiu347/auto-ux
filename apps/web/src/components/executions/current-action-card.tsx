@@ -48,7 +48,7 @@ export function CurrentActionCard({
           label="Agent 心跳"
           value={
             execution.agentHeartbeatAt
-              ? formatDate(execution.agentHeartbeatAt)
+              ? formatHeartbeat(execution.agentHeartbeatAt)
               : "无持久化记录"
           }
         />
@@ -103,4 +103,19 @@ function formatDate(value: string): string {
         dateStyle: "medium",
         timeStyle: "medium"
       }).format(date);
+}
+
+function formatHeartbeat(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  const ageMilliseconds = Date.now() - date.getTime();
+  const age =
+    ageMilliseconds < 0
+      ? "时间晚于当前设备"
+      : ageMilliseconds < 60_000
+        ? "不到 1 分钟前"
+        : `${Math.floor(ageMilliseconds / 60_000)} 分钟前`;
+  return `${formatDate(value)}（${age}）`;
 }

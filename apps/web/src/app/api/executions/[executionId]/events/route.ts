@@ -16,11 +16,15 @@ type RouteContext = {
 };
 
 type ResolveService = (user: CurrentUser) => ExecutionService;
+type Authenticate = (request: Request) => CurrentUser | null;
 
-export function createEventsHandlers(resolveService: ResolveService) {
+export function createEventsHandlers(
+  resolveService: ResolveService,
+  authenticate: Authenticate = getCurrentUser
+) {
   return {
     async POST(request: Request, routeContext: RouteContext): Promise<Response> {
-      const user = getCurrentUser(request);
+      const user = authenticate(request);
       if (!user) {
         return errorResponse("UNAUTHENTICATED", 401);
       }
@@ -46,7 +50,7 @@ export function createEventsHandlers(resolveService: ResolveService) {
     },
 
     async GET(request: Request, routeContext: RouteContext): Promise<Response> {
-      const user = getCurrentUser(request);
+      const user = authenticate(request);
       if (!user) {
         return errorResponse("UNAUTHENTICATED", 401);
       }

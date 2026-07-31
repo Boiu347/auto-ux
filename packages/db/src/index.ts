@@ -5,6 +5,7 @@ export type {
   AppendStepEventResult,
   ConfirmationClaim,
   ConfirmationRecord,
+  ExecutionAgentHeartbeat,
   ExecutionRecord,
   ExecutionRepository,
   PersistedStepEvent,

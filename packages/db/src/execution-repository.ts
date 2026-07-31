@@ -32,6 +32,11 @@ export interface PersistedStepEvent {
   event: ExecutionEvent;
 }
 
+export interface ExecutionAgentHeartbeat {
+  agentId: string;
+  lastHeartbeatAt: Date | null;
+}
+
 export class InvalidExecutionCursorError extends Error {
   readonly code = "INVALID_CURSOR";
 
@@ -77,6 +82,9 @@ export interface ExecutionRepository {
     userId: string,
     workspaceId: string
   ): Promise<ExecutionRecord | null>;
+  findExecutionAgentHeartbeat(
+    executionId: string
+  ): Promise<ExecutionAgentHeartbeat | null>;
   appendStepEvent(event: ExecutionEvent): Promise<void>;
   appendStepEventForAgent(input: {
     agentId: string;
@@ -164,6 +172,32 @@ export class PrismaExecutionRepository implements ExecutionRepository {
     });
 
     return execution ? this.toExecutionRecord(execution) : null;
+  }
+
+  async findExecutionAgentHeartbeat(
+    executionId: string
+  ): Promise<ExecutionAgentHeartbeat | null> {
+    const execution = await this.client.execution.findFirst({
+      where: {
+        id: executionId,
+        userId: this.scope.userId,
+        workspaceId: this.scope.workspaceId
+      },
+      select: { executionLockAgentId: true }
+    });
+    if (!execution?.executionLockAgentId) {
+      return null;
+    }
+    const agent = await this.client.localAgent.findFirst({
+      where: {
+        id: execution.executionLockAgentId,
+        workspaceId: this.scope.workspaceId
+      },
+      select: { id: true, lastHeartbeatAt: true }
+    });
+    return agent
+      ? { agentId: agent.id, lastHeartbeatAt: agent.lastHeartbeatAt }
+      : null;
   }
 
   async appendStepEvent(event: ExecutionEvent): Promise<void> {

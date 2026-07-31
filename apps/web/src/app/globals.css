@@ -247,6 +247,23 @@ a {
   gap: 16px;
 }
 
+.development-session-card {
+  max-width: 680px;
+  margin-bottom: 24px;
+}
+
+.development-session-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: end;
+}
+
+.development-session-form input,
+.development-session-form button {
+  border-radius: 8px;
+}
+
 .empty-list-panel {
   max-width: 680px;
 }
@@ -318,6 +335,10 @@ button:focus-visible {
   }
 
   .fact-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .development-session-form {
     grid-template-columns: minmax(0, 1fr);
   }
 

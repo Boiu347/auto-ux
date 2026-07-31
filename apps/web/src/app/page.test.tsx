@@ -12,5 +12,9 @@ describe("home page", () => {
     expect(markup).toContain("在 Codex 中开始执行");
     expect(markup).toContain("disabled=\"\"");
     expect(markup).toContain("创建并确认配置草案后，才能在 Codex 中开始执行。");
+    expect(markup).toContain("开发会话");
+    expect(markup).toContain("用户 ID");
+    expect(markup).toContain("工作区 ID");
+    expect(markup).toContain("建立开发会话");
   });
 });

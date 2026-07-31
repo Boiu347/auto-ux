@@ -19,6 +19,7 @@ import { createExecutionCollectionHandlers } from "./route";
 import { createExecutionItemHandlers } from "./[executionId]/route";
 import { createConfirmationHandler } from "./[executionId]/confirmations/route";
 import { createEventsHandlers } from "./[executionId]/events/route";
+import { createDevelopmentSessionHandlers } from "../dev/session/route";
 
 const owner = { userId: "U-1", workspaceId: "W-1" };
 
@@ -66,6 +67,62 @@ const highRiskTransitions = [
 ];
 
 describe("execution events API", () => {
+  it("uses the signed development cookie for summary, SSE, and confirmation routes", async () => {
+    const secret = "test-secret-with-at-least-32-characters";
+    const session = await createDevelopmentSessionHandlers({
+      environment: "test",
+      secret
+    }).POST(
+      new Request("http://localhost/api/dev/session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(owner)
+      })
+    );
+    const cookie = session.headers.get("set-cookie")!.split(";")[0]!;
+    const authenticate = (request: Request) =>
+      getCurrentUser(request, "test", secret);
+    const store = new MemoryExecutionStore();
+    store.execution = {
+      ...executionRecord(),
+      status: "waiting_confirmation",
+      phase: "publish_confirm"
+    };
+    const item = createExecutionItemHandlers(resolve(store), authenticate);
+    const events = createEventsHandlers(resolve(store), authenticate);
+    const confirmation = createConfirmationHandler(resolve(store), authenticate);
+    const browserRequest = (url: string, init?: RequestInit) =>
+      new Request(url, {
+        ...init,
+        headers: {
+          ...(init?.body ? { "content-type": "application/json" } : {}),
+          cookie
+        }
+      });
+
+    const summary = await item.GET(
+      browserRequest("http://localhost/api/executions/EX-1"),
+      context("EX-1")
+    );
+    expect(summary.status).toBe(200);
+
+    const stream = await events.GET(
+      browserRequest("http://localhost/api/executions/EX-1/events"),
+      context("EX-1")
+    );
+    expect(stream.headers.get("content-type")).toContain("text/event-stream");
+    await stream.body?.cancel();
+
+    const issued = await confirmation(
+      browserRequest("http://localhost/api/executions/EX-1/confirmations", {
+        method: "POST",
+        body: JSON.stringify({ action: "publish", configVersion: 1 })
+      }),
+      context("EX-1")
+    );
+    expect(issued.status).toBe(201);
+  });
+
   it("rejects an event from an agent not holding the lock", async () => {
     const store = new MemoryExecutionStore();
     store.execution = executionRecord();
@@ -253,6 +310,28 @@ describe("execution events API", () => {
       context(createdBody.execution.id)
     );
     expect(otherTenant.status).toBe(404);
+  });
+
+  it("returns the persisted scoped agent heartbeat in the execution summary", async () => {
+    const store = new MemoryExecutionStore();
+    store.execution = executionRecord();
+    store.agentHeartbeat = {
+      agentId: "agent-owner",
+      lastHeartbeatAt: new Date("2026-07-30T08:00:00.000Z")
+    };
+    const item = createExecutionItemHandlers(resolve(store));
+
+    const response = await item.GET(
+      request("http://localhost/api/executions/EX-1"),
+      context("EX-1")
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      execution: {
+        agentId: "agent-owner",
+        agentHeartbeatAt: "2026-07-30T08:00:00.000Z"
+      }
+    });
   });
 
   it("enforces tenant ownership for SSE before opening the stream", async () => {
@@ -869,6 +948,10 @@ class MemoryExecutionStore implements ExecutionDataStore {
     tokenHash: string;
   }> = [];
   failEventListing = false;
+  agentHeartbeat: {
+    agentId: string;
+    lastHeartbeatAt: Date | null;
+  } | null = null;
   private activeScope = owner;
 
   scoped(scope: { userId: string; workspaceId: string }): MemoryExecutionStore {
@@ -900,6 +983,10 @@ class MemoryExecutionStore implements ExecutionDataStore {
       this.execution.workspaceId === this.activeScope.workspaceId
       ? this.execution
       : null;
+  }
+
+  async findExecutionAgentHeartbeat() {
+    return this.agentHeartbeat;
   }
 
   async acquireLock(_executionId: string, agentId: string) {

@@ -24,7 +24,15 @@ const execution: ExecutionSummary = {
   status: "running",
   phase: "environment_preflight",
   targetPolicy: "create_only",
-  updatedAt: "2026-07-30T08:00:00.000Z"
+  updatedAt: "2026-07-30T08:00:00.000Z",
+  agentId: "agent-owner",
+  agentHeartbeatAt: "2026-07-30T08:00:00.000Z"
+};
+
+const connectedBridge = {
+  getConnection: () => ({ connected: true, agentId: "agent-owner" }),
+  subscribe: () => () => undefined,
+  deliverConfirmation: vi.fn().mockResolvedValue({ acknowledged: true })
 };
 
 const runningEvent: ExecutionEvent = {
@@ -48,6 +56,10 @@ const runningEvent: ExecutionEvent = {
 describe("HybridProgress", () => {
   beforeEach(() => {
     FakeEventSource.instances = [];
+    connectedBridge.deliverConfirmation.mockReset();
+    connectedBridge.deliverConfirmation.mockResolvedValue({
+      acknowledged: true
+    });
     vi.stubGlobal("EventSource", FakeEventSource);
   });
 
@@ -72,6 +84,24 @@ describe("HybridProgress", () => {
     expect(screen.getByText("create_only")).toBeInTheDocument();
     expect(screen.getByText("配置版本 7")).toBeInTheDocument();
     expect(screen.queryByText("已接通")).not.toBeInTheDocument();
+  });
+
+  it("shows the persisted agent heartbeat timestamp and its age", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-30T08:30:00.000Z"));
+    render(
+      <HybridProgress
+        execution={{
+          ...execution,
+          agentId: "agent-owner",
+          agentHeartbeatAt: "2026-07-30T08:00:00.000Z"
+        }}
+        initialEvents={[persisted("cursor:opaque:first", runningEvent)]}
+      />
+    );
+
+    expect(screen.getByText(/30 分钟前/)).toBeInTheDocument();
+    expect(screen.getByText(/2026/)).toBeInTheDocument();
   });
 
   it("keeps unavailable platform evidence unknown", () => {
@@ -128,6 +158,7 @@ describe("HybridProgress", () => {
               )
             )
           ]}
+          localAgentBridge={connectedBridge}
         />
       );
 
@@ -162,6 +193,7 @@ describe("HybridProgress", () => {
             )
           )
         ]}
+        localAgentBridge={connectedBridge}
       />
     );
 
@@ -208,6 +240,191 @@ describe("HybridProgress", () => {
     );
   });
 
+  it("refreshes the authoritative summary after SSE and ignores an older response", async () => {
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    const fetchMock = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <HybridProgress
+        execution={execution}
+        initialEvents={[persisted("cursor:opaque:first", runningEvent)]}
+        localAgentBridge={connectedBridge}
+      />
+    );
+
+    const publishWaiting = checkpoint(
+      "publish.confirm",
+      "waiting_confirmation",
+      "publish_confirm"
+    );
+    const numbersWaiting = checkpoint(
+      "numbers.confirm",
+      "waiting_confirmation",
+      "numbers_confirm"
+    );
+    act(() => {
+      FakeEventSource.instances[0]?.emit(
+        publishWaiting,
+        "cursor:opaque:publish"
+      );
+      FakeEventSource.instances[0]?.emit(
+        numbersWaiting,
+        "cursor:opaque:numbers"
+      );
+    });
+
+    second.resolve(
+      summaryResponse({
+        ...execution,
+        status: "waiting_confirmation",
+        phase: "numbers_confirm"
+      }, numbersWaiting)
+    );
+    expect(
+      await screen.findByRole("button", { name: "确认导入号码" })
+    ).toBeEnabled();
+
+    first.resolve(
+      summaryResponse({
+        ...execution,
+        status: "waiting_confirmation",
+        phase: "publish_confirm"
+      }, publishWaiting)
+    );
+    await act(async () => undefined);
+
+    expect(
+      screen.getByRole("button", { name: "确认导入号码" })
+    ).toBeEnabled();
+    expect(
+      screen.queryByRole("button", { name: "确认发布" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not issue a confirmation without the matching connected agent bridge", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const waitingEvent = checkpoint(
+      "publish.confirm",
+      "waiting_confirmation",
+      "publish_confirm"
+    );
+
+    render(
+      <HybridProgress
+        execution={{
+          ...execution,
+          status: "waiting_confirmation",
+          phase: "publish_confirm"
+        }}
+        initialEvents={[persisted("cursor:opaque:publish", waitingEvent)]}
+        localAgentBridge={null}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "确认发布" })).toBeDisabled();
+    expect(screen.getByText("本地代理桥未连接")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("retries delivery with the same in-memory token and clears it after ACK", async () => {
+    const issued = {
+      confirmationId: "confirm:0123456789abcdef",
+      action: "publish" as const,
+      executionId: "EX-1",
+      configVersion: 7,
+      token: `confirm_token:${"1".repeat(64)}`,
+      expiresAt: "2099-07-30T08:05:00.000Z"
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ confirmation: issued }), {
+        status: 201,
+        headers: { "content-type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    connectedBridge.deliverConfirmation
+      .mockRejectedValueOnce(new Error("bridge offline"))
+      .mockResolvedValueOnce({ acknowledged: true });
+    const waitingEvent = checkpoint(
+      "publish.confirm",
+      "waiting_confirmation",
+      "publish_confirm"
+    );
+
+    render(
+      <HybridProgress
+        execution={{
+          ...execution,
+          status: "waiting_confirmation",
+          phase: "publish_confirm"
+        }}
+        initialEvents={[persisted("cursor:opaque:publish", waitingEvent)]}
+        localAgentBridge={connectedBridge}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "确认发布" }));
+    expect(
+      await screen.findByRole("button", { name: "重试交付确认" })
+    ).toBeEnabled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(connectedBridge.deliverConfirmation).toHaveBeenNthCalledWith(
+      1,
+      issued
+    );
+    expect(screen.queryByText(issued.token)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "重试交付确认" }));
+    expect(await screen.findByText("本地代理已确认接收")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(connectedBridge.deliverConfirmation).toHaveBeenNthCalledWith(
+      2,
+      issued
+    );
+  });
+
+  it("recovers from a pre-issue network failure and prevents double submission", async () => {
+    const pending = deferred<Response>();
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockReturnValueOnce(pending.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const waitingEvent = checkpoint(
+      "publish.confirm",
+      "waiting_confirmation",
+      "publish_confirm"
+    );
+    render(
+      <HybridProgress
+        execution={{
+          ...execution,
+          status: "waiting_confirmation",
+          phase: "publish_confirm"
+        }}
+        initialEvents={[persisted("cursor:opaque:publish", waitingEvent)]}
+        localAgentBridge={connectedBridge}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "确认发布" }));
+    expect(
+      await screen.findByRole("button", { name: "确认发布" })
+    ).toBeEnabled();
+
+    const retry = screen.getByRole("button", { name: "确认发布" });
+    act(() => {
+      fireEvent.click(retry);
+      fireEvent.click(retry);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("renders loading, empty, and load-error states explicitly", () => {
     const { rerender } = render(
       <HybridProgress execution={execution} initialEvents={[]} loading />
@@ -228,18 +445,29 @@ describe("HybridProgress", () => {
   });
 
   it("reports confirmation conflict without optimistic success", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ code: "CONFIRMATION_CONFIG_MISMATCH" }), {
-        status: 409,
-        headers: { "content-type": "application/json" }
-      })
-    );
-    vi.stubGlobal("fetch", fetchMock);
     const waitingEvent = checkpoint(
       "publish.confirm",
       "waiting_confirmation",
       "publish_confirm"
     );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ code: "CONFIRMATION_CONFIG_MISMATCH" }),
+          {
+            status: 409,
+            headers: { "content-type": "application/json" }
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        summaryResponse(
+          { ...execution, status: "running", phase: "publish_verify" },
+          checkpoint("publish.verify", "running", "publish_verify")
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
 
     render(
       <HybridProgress
@@ -249,17 +477,19 @@ describe("HybridProgress", () => {
           phase: "publish_confirm"
         }}
         initialEvents={[persisted("cursor:opaque:publish", waitingEvent)]}
+        localAgentBridge={connectedBridge}
       />
     );
 
     fireEvent.click(screen.getByRole("button", { name: "确认发布" }));
 
-    await waitFor(() => {
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "确认已失效或执行状态已变化"
-      );
-    });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "确认发布" })
+      ).not.toBeInTheDocument()
+    );
     expect(screen.queryByText("发布成功")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/executions/EX-1/confirmations",
       expect.objectContaining({
@@ -268,6 +498,71 @@ describe("HybridProgress", () => {
       })
     );
   });
+
+  it("reissues after a conflict only when the refreshed exact gate still waits", async () => {
+    const waitingEvent = checkpoint(
+      "publish.confirm",
+      "waiting_confirmation",
+      "publish_confirm"
+    );
+    const issued = {
+      confirmationId: "confirm:fedcba9876543210",
+      action: "publish" as const,
+      executionId: "EX-1",
+      configVersion: 7,
+      token: `confirm_token:${"2".repeat(64)}`,
+      expiresAt: "2099-07-30T08:05:00.000Z"
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: "CONFIRMATION_INVALID" }), {
+          status: 409,
+          headers: { "content-type": "application/json" }
+        })
+      )
+      .mockResolvedValueOnce(
+        summaryResponse(
+          {
+            ...execution,
+            status: "waiting_confirmation",
+            phase: "publish_confirm"
+          },
+          waitingEvent
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ confirmation: issued }), {
+          status: 201,
+          headers: { "content-type": "application/json" }
+        })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <HybridProgress
+        execution={{
+          ...execution,
+          status: "waiting_confirmation",
+          phase: "publish_confirm"
+        }}
+        initialEvents={[persisted("cursor:opaque:publish", waitingEvent)]}
+        localAgentBridge={connectedBridge}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "确认发布" }));
+    expect(
+      await screen.findByText(/状态已刷新，可重试/)
+    ).toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: "确认发布" });
+    expect(retry).toBeEnabled();
+
+    fireEvent.click(retry);
+    expect(await screen.findByText("本地代理已确认接收")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(connectedBridge.deliverConfirmation).toHaveBeenCalledWith(issued);
+  });
 });
 
 function persisted(
@@ -275,6 +570,29 @@ function persisted(
   event: ExecutionEvent
 ): PersistedExecutionEvent {
   return { cursor, event };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function summaryResponse(
+  summary: ExecutionSummary,
+  event: ExecutionEvent
+): Response {
+  return new Response(
+    JSON.stringify({
+      execution: summary,
+      events: [persisted(`cursor:summary:${event.stepId}`, event)]
+    }),
+    { status: 200, headers: { "content-type": "application/json" } }
+  );
 }
 
 function checkpoint(

@@ -97,6 +97,37 @@ describe("PrismaExecutionRepository", () => {
     await expect(repository.acquireLock(execution.id, "agent-2", 60)).resolves.toBe(false);
   });
 
+  it("returns the locked agent heartbeat only inside the execution workspace", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+    const heartbeatAt = new Date("2026-07-30T08:00:00.000Z");
+    await prisma.localAgent.create({
+      data: {
+        id: "agent-owner",
+        workspaceId: "W-1",
+        version: "1.0.0",
+        capabilities: {},
+        lastHeartbeatAt: heartbeatAt
+      }
+    });
+    await repository.acquireLock(execution.id, "agent-owner", 60);
+
+    await expect(
+      repository.findExecutionAgentHeartbeat(execution.id)
+    ).resolves.toEqual({ agentId: "agent-owner", lastHeartbeatAt: heartbeatAt });
+
+    const otherRepository = new PrismaExecutionRepository(prisma, {
+      userId: "U-2",
+      workspaceId: "W-2"
+    });
+    await expect(
+      otherRepository.findExecutionAgentHeartbeat(execution.id)
+    ).resolves.toBeNull();
+  });
+
   it("allows exactly one winner under concurrent lock contention", async () => {
     const execution = await repository.create({
       userId: "U-1",
