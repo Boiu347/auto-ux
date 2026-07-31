@@ -605,76 +605,7 @@ class PrismaExecutionDataStore implements ExecutionDataStore {
     | { status: "state_mismatch" }
     | { status: "lock_mismatch" }
   > {
-    return prisma.$transaction(async (transaction) => {
-      const rows = await transaction.$queryRaw<
-        Array<{
-          status: string;
-          phase: string;
-          configVersion: number;
-          executionLockAgentId: string | null;
-          lockActive: boolean;
-        }>
-      >`
-        SELECT "status", "phase", "configVersion", "executionLockAgentId",
-               ("executionLockExpiresAt" > CURRENT_TIMESTAMP) AS "lockActive"
-        FROM "Execution"
-        WHERE "id" = ${input.executionId}
-          AND "userId" = ${this.scope.userId}
-          AND "workspaceId" = ${this.scope.workspaceId}
-        FOR UPDATE`;
-      const execution = rows[0];
-      if (
-        !execution ||
-        execution.status !== input.expectedState.status ||
-        execution.phase !== input.expectedState.phase ||
-        execution.configVersion !== input.configVersion
-      ) {
-        return { status: "state_mismatch" } as const;
-      }
-      if (
-        !execution.lockActive ||
-        execution.executionLockAgentId !== input.agentId
-      ) {
-        return { status: "lock_mismatch" } as const;
-      }
-
-      await transaction.$executeRaw`
-        UPDATE "Confirmation"
-        SET "consumedAt" = CURRENT_TIMESTAMP
-        WHERE "executionId" = ${input.executionId}
-          AND "userId" = ${this.scope.userId}
-          AND "workspaceId" = ${this.scope.workspaceId}
-          AND "action" = ${input.action}::"ConfirmationAction"
-          AND "configVersion" = ${input.configVersion}
-          AND "consumedAt" IS NULL
-          AND "expiresAt" > CURRENT_TIMESTAMP`;
-      const confirmation = await transaction.confirmation.create({
-        data: {
-          id: input.id,
-          executionId: input.executionId,
-          userId: this.scope.userId,
-          workspaceId: this.scope.workspaceId,
-          action: input.action,
-          configVersion: input.configVersion,
-          tokenHash: input.tokenHash,
-          expiresAt: input.expiresAt
-        }
-      });
-      return {
-        status: "created",
-        confirmation: {
-          id: confirmation.id,
-          executionId: confirmation.executionId,
-          userId: confirmation.userId,
-          workspaceId: confirmation.workspaceId,
-          action: confirmation.action,
-          configVersion: confirmation.configVersion,
-          expiresAt: confirmation.expiresAt,
-          consumedAt: confirmation.consumedAt,
-          createdAt: confirmation.createdAt
-        }
-      } as const;
-    });
+    return this.repository.createConfirmationForGate(input);
   }
 
   findConfirmation(

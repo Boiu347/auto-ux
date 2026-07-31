@@ -6,6 +6,7 @@ export type {
   ClaimExecutionAgentResult,
   ConfirmationClaim,
   ConfirmationRecord,
+  CreateConfirmationForGateResult,
   ExecutionAgentHeartbeat,
   ExecutionRecord,
   HeartbeatExecutionAgentResult,

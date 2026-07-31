@@ -25,6 +25,42 @@ const event: ExecutionEvent = {
   nextAction: "retry_preflight"
 };
 
+async function waitForPendingAdvisoryLock(
+  client: PrismaClient,
+  lockId: number
+): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const locks = await client.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(*)::bigint AS "count"
+      FROM pg_locks
+      WHERE "locktype" = 'advisory'
+        AND "objid" = ${lockId}
+        AND "granted" = false`;
+    if ((locks[0]?.count ?? 0n) > 0n) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("confirmation issuance never reached the blocked insert");
+}
+
+async function waitForPendingDatabaseLock(client: PrismaClient): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const locks = await client.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(*)::bigint AS "count"
+      FROM pg_locks
+      WHERE "locktype" <> 'advisory'
+        AND "granted" = false`;
+    if ((locks[0]?.count ?? 0n) > 0n) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("concurrent issuance never waited on the execution row lock");
+}
+
 describe("PrismaExecutionRepository", () => {
   beforeEach(async () => {
     await prisma.executionStep.deleteMany();
@@ -703,6 +739,116 @@ describe("PrismaExecutionRepository", () => {
         tokenHash: "sha256:1111111111111111"
       })
     ).resolves.toBeNull();
+  });
+
+  it("serializes concurrent issuance for the same exact confirmation gate", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+    await repository.acquireLock(execution.id, "agent-owner", 60);
+    await prisma.execution.update({
+      where: { id: execution.id },
+      data: { status: "waiting_confirmation", phase: "publish_confirm" }
+    });
+
+    const blocker = new PrismaClient();
+    let releaseBlocker!: () => void;
+    const blockerRelease = new Promise<void>((resolve) => {
+      releaseBlocker = resolve;
+    });
+    let markBlockerReady!: () => void;
+    const blockerReady = new Promise<void>((resolve) => {
+      markBlockerReady = resolve;
+    });
+
+    await prisma.$executeRawUnsafe(`
+      CREATE OR REPLACE FUNCTION "pause_first_confirmation_insert"()
+      RETURNS trigger AS $$
+      BEGIN
+        IF NEW."id" = 'confirm:race_first' THEN
+          PERFORM pg_advisory_xact_lock(70431);
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql`);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER "pause_first_confirmation_insert"
+      BEFORE INSERT ON "Confirmation"
+      FOR EACH ROW EXECUTE FUNCTION "pause_first_confirmation_insert"()`);
+
+    const blockerTask = blocker.$transaction(async (transaction) => {
+      await transaction.$executeRawUnsafe("SELECT pg_advisory_xact_lock(70431)");
+      markBlockerReady();
+      await blockerRelease;
+    });
+
+    try {
+      await blockerReady;
+      const expiresAt = new Date(Date.now() + 60_000);
+      const first = repository.createConfirmationForGate({
+        id: "confirm:race_first",
+        executionId: execution.id,
+        action: "publish",
+        configVersion: 1,
+        tokenHash: "sha256:race_first",
+        expiresAt,
+        agentId: "agent-owner",
+        expectedState: {
+          status: "waiting_confirmation",
+          phase: "publish_confirm"
+        }
+      });
+      await waitForPendingAdvisoryLock(prisma, 70431);
+
+      const second = repository.createConfirmationForGate({
+        id: "confirm:race_second",
+        executionId: execution.id,
+        action: "publish",
+        configVersion: 1,
+        tokenHash: "sha256:race_second",
+        expiresAt,
+        agentId: "agent-owner",
+        expectedState: {
+          status: "waiting_confirmation",
+          phase: "publish_confirm"
+        }
+      });
+      const secondBeforeRelease = await Promise.race([
+        second.then(() => "completed" as const),
+        waitForPendingDatabaseLock(prisma).then(() => "blocked" as const)
+      ]);
+      expect(secondBeforeRelease).toBe("blocked");
+
+      releaseBlocker();
+      await blockerTask;
+      await expect(Promise.all([first, second])).resolves.toMatchObject([
+        { status: "created" },
+        { status: "created" }
+      ]);
+      await expect(
+        prisma.confirmation.count({
+          where: {
+            executionId: execution.id,
+            action: "publish",
+            configVersion: 1,
+            consumedAt: null,
+            expiresAt: { gt: new Date() }
+          }
+        })
+      ).resolves.toBe(1);
+    } finally {
+      releaseBlocker();
+      await blockerTask.catch(() => undefined);
+      await blocker.$disconnect();
+      await prisma.$executeRawUnsafe(
+        `DROP TRIGGER IF EXISTS "pause_first_confirmation_insert" ON "Confirmation"`
+      );
+      await prisma.$executeRawUnsafe(
+        `DROP FUNCTION IF EXISTS "pause_first_confirmation_insert"()`
+      );
+    }
   });
 
   it("binds confirmation consumption without consuming a mismatched record", async () => {

@@ -86,6 +86,11 @@ export interface ConfirmationClaim {
   tokenHash: string;
 }
 
+export type CreateConfirmationForGateResult =
+  | { status: "created"; confirmation: ConfirmationRecord }
+  | { status: "state_mismatch" }
+  | { status: "lock_mismatch" };
+
 export interface ExecutionRepository {
   create(input: {
     userId: string;
@@ -135,6 +140,19 @@ export interface ExecutionRepository {
     tokenHash: string;
     expiresAt: Date;
   }): Promise<ConfirmationRecord>;
+  createConfirmationForGate(input: {
+    id: string;
+    executionId: string;
+    action: ConfirmationAction;
+    configVersion: number;
+    tokenHash: string;
+    expiresAt: Date;
+    agentId: string;
+    expectedState: {
+      status: "waiting_confirmation";
+      phase: ExecutionPhase;
+    };
+  }): Promise<CreateConfirmationForGateResult>;
   findConfirmation(input: ConfirmationClaim): Promise<ConfirmationRecord | null>;
 }
 
@@ -595,6 +613,82 @@ export class PrismaExecutionRepository implements ExecutionRepository {
     });
 
     return this.toConfirmationRecord(confirmation);
+  }
+
+  async createConfirmationForGate(input: {
+    id: string;
+    executionId: string;
+    action: ConfirmationAction;
+    configVersion: number;
+    tokenHash: string;
+    expiresAt: Date;
+    agentId: string;
+    expectedState: {
+      status: "waiting_confirmation";
+      phase: ExecutionPhase;
+    };
+  }): Promise<CreateConfirmationForGateResult> {
+    const action = ConfirmationActionSchema.parse(input.action);
+    return this.client.$transaction(async (transaction) => {
+      const rows = await transaction.$queryRaw<
+        Array<{
+          status: string;
+          phase: string;
+          configVersion: number;
+          executionLockAgentId: string | null;
+          lockActive: boolean;
+        }>
+      >`
+        SELECT "status", "phase", "configVersion", "executionLockAgentId",
+               ("executionLockExpiresAt" > CURRENT_TIMESTAMP) AS "lockActive"
+        FROM "Execution"
+        WHERE "id" = ${input.executionId}
+          AND "userId" = ${this.scope.userId}
+          AND "workspaceId" = ${this.scope.workspaceId}
+        FOR UPDATE`;
+      const execution = rows[0];
+      if (
+        !execution ||
+        execution.status !== input.expectedState.status ||
+        execution.phase !== input.expectedState.phase ||
+        execution.configVersion !== input.configVersion
+      ) {
+        return { status: "state_mismatch" };
+      }
+      if (
+        !execution.lockActive ||
+        execution.executionLockAgentId !== input.agentId
+      ) {
+        return { status: "lock_mismatch" };
+      }
+
+      await transaction.$executeRaw`
+        UPDATE "Confirmation"
+        SET "consumedAt" = CURRENT_TIMESTAMP
+        WHERE "executionId" = ${input.executionId}
+          AND "userId" = ${this.scope.userId}
+          AND "workspaceId" = ${this.scope.workspaceId}
+          AND "action" = ${action}::"ConfirmationAction"
+          AND "configVersion" = ${input.configVersion}
+          AND "consumedAt" IS NULL
+          AND "expiresAt" > CURRENT_TIMESTAMP`;
+      const confirmation = await transaction.confirmation.create({
+        data: {
+          id: input.id,
+          executionId: input.executionId,
+          userId: this.scope.userId,
+          workspaceId: this.scope.workspaceId,
+          action,
+          configVersion: input.configVersion,
+          tokenHash: input.tokenHash,
+          expiresAt: input.expiresAt
+        }
+      });
+      return {
+        status: "created",
+        confirmation: this.toConfirmationRecord(confirmation)
+      };
+    });
   }
 
   async findConfirmation(

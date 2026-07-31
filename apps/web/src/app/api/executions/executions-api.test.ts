@@ -763,29 +763,45 @@ describe("execution events API", () => {
   it("rejects a live confirmation replay after its exact gate has closed", async () => {
     const store = confirmationGateStore();
     const service = new ExecutionService(store);
-    const first = await service.issueCreatorConfirmation(
+    const issued = await service.issueCreatorConfirmation(
       "EX-1",
       "publish",
       1,
       "agent-owner"
     );
-    const second = await service.issueCreatorConfirmation(
-      "EX-1",
-      "publish",
-      1,
-      "agent-owner"
-    );
+    const legacyReplay = {
+      confirmationId: `confirm:${"b".repeat(32)}`,
+      token: `confirm_token:${"c".repeat(64)}`,
+      action: "publish" as const,
+      configVersion: 1
+    };
+    store.confirmations.push({
+      confirmation: {
+        id: legacyReplay.confirmationId,
+        executionId: "EX-1",
+        userId: owner.userId,
+        workspaceId: owner.workspaceId,
+        action: legacyReplay.action,
+        configVersion: legacyReplay.configVersion,
+        expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+        consumedAt: null,
+        createdAt: new Date("2026-07-30T08:00:01.000Z")
+      },
+      tokenHash: `sha256:${createHash("sha256")
+        .update(legacyReplay.token)
+        .digest("hex")}`
+    });
 
     await service.appendEvent(
       "agent-owner",
       confirmedPublishEvent(1),
-      second
+      issued
     );
     await expect(
       service.appendEvent(
         "agent-owner",
         confirmedPublishEvent(2),
-        first
+        legacyReplay
       )
     ).rejects.toMatchObject({ code: "CONFIRMATION_INVALID" });
     expect(store.events).toHaveLength(1);
