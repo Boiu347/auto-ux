@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { ExecutionEventSchema, ExecutionPacketSchema } from "./execution";
+import {
+  AgentCapabilityManifestSchema,
+  ExecutionEventSchema,
+  ExecutionPacketSchema
+} from "./execution";
 
 describe("execution contracts", () => {
   const packet = {
@@ -233,5 +237,36 @@ describe("execution contracts", () => {
     });
 
     expect(result.success && result.data.confirmation?.action).toBe("publish");
+  });
+
+  it("accepts only the exact supported local-agent capability handshake", () => {
+    const manifest = {
+      pluginVersion: "simulator-1.0.0",
+      contractVersion: "1",
+      capabilities: { feishuCli: true, browser: true },
+      agentId: "agent-simulator",
+      sessionId: "session-EX-1",
+      executionId: "EX-1"
+    };
+
+    expect(AgentCapabilityManifestSchema.parse(manifest)).toEqual(manifest);
+    expect(
+      AgentCapabilityManifestSchema.safeParse({
+        ...manifest,
+        contractVersion: "0"
+      }).success
+    ).toBe(false);
+    expect(
+      AgentCapabilityManifestSchema.safeParse({
+        ...manifest,
+        capabilities: { ...manifest.capabilities, browser: false }
+      }).success
+    ).toBe(false);
+    expect(
+      AgentCapabilityManifestSchema.safeParse({
+        ...manifest,
+        rawFeishuDocument: "forbidden"
+      }).success
+    ).toBe(false);
   });
 });

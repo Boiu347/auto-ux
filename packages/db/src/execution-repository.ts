@@ -1,9 +1,11 @@
 import {
+  AgentCapabilityManifestSchema,
   ConfirmationActionSchema,
   ExecutionEventSchema,
   ExecutionPhaseSchema,
   ExecutionStatusSchema,
   type ConfirmationAction,
+  type AgentCapabilityManifest,
   type ExecutionEvent,
   type ExecutionPhase,
   type ExecutionStatus
@@ -63,6 +65,17 @@ export type AppendStepEventResult =
   | "state_mismatch"
   | "confirmation_invalid";
 
+export type ClaimExecutionAgentResult =
+  | "claimed"
+  | "locked"
+  | "session_mismatch"
+  | "agent_scope_mismatch"
+  | "not_found";
+
+export type HeartbeatExecutionAgentResult =
+  | "renewed"
+  | "lock_mismatch";
+
 export interface ConfirmationClaim {
   confirmationId: string;
   executionId: string;
@@ -88,6 +101,7 @@ export interface ExecutionRepository {
   appendStepEvent(event: ExecutionEvent): Promise<void>;
   appendStepEventForAgent(input: {
     agentId: string;
+    sessionId?: string;
     event: ExecutionEvent;
     expectedState: { status: ExecutionStatus; phase: ExecutionPhase };
     nextState: { status: ExecutionStatus; phase: ExecutionPhase };
@@ -99,6 +113,16 @@ export interface ExecutionRepository {
     afterCursor?: string
   ): Promise<PersistedStepEvent[]>;
   acquireLock(executionId: string, agentId: string, ttlSeconds: number): Promise<boolean>;
+  claimExecutionAgent(input: {
+    manifest: AgentCapabilityManifest;
+    ttlSeconds: number;
+  }): Promise<ClaimExecutionAgentResult>;
+  heartbeatExecutionAgent(input: {
+    executionId: string;
+    agentId: string;
+    sessionId: string;
+    ttlSeconds: number;
+  }): Promise<HeartbeatExecutionAgentResult>;
   claimOperation(executionId: string, fingerprint: string): Promise<{ claimed: boolean; attempt?: number }>;
   completeOperation(executionId: string, fingerprint: string, attempt: number, status: "succeeded" | "failed"): Promise<void>;
   createConfirmation(input: {
@@ -220,6 +244,7 @@ export class PrismaExecutionRepository implements ExecutionRepository {
 
   async appendStepEventForAgent(input: {
     agentId: string;
+    sessionId?: string;
     event: ExecutionEvent;
     expectedState: { status: ExecutionStatus; phase: ExecutionPhase };
     nextState: { status: ExecutionStatus; phase: ExecutionPhase };
@@ -230,6 +255,7 @@ export class PrismaExecutionRepository implements ExecutionRepository {
     const expectedPhase = ExecutionPhaseSchema.parse(input.expectedState.phase);
     const nextStatus = ExecutionStatusSchema.parse(input.nextState.status);
     const nextPhase = ExecutionPhaseSchema.parse(input.nextState.phase);
+    const sessionId = input.sessionId ?? null;
 
     return this.client.$transaction(async (transaction) => {
       const executions = await transaction.$queryRaw<
@@ -241,6 +267,7 @@ export class PrismaExecutionRepository implements ExecutionRepository {
           AND "userId" = ${this.scope.userId}
           AND "workspaceId" = ${this.scope.workspaceId}
           AND "executionLockAgentId" = ${input.agentId}
+          AND ("executionLockSessionId" IS NULL OR "executionLockSessionId" = ${sessionId})
           AND "executionLockExpiresAt" > CURRENT_TIMESTAMP
         FOR UPDATE`;
       const execution = executions[0];
@@ -370,6 +397,7 @@ export class PrismaExecutionRepository implements ExecutionRepository {
     const rows = await this.client.$queryRaw<{ id: string }[]>`
       UPDATE "Execution"
       SET "executionLockAgentId" = ${agentId},
+          "executionLockSessionId" = NULL,
           "executionLockExpiresAt" = CURRENT_TIMESTAMP + (${ttlSeconds} * INTERVAL '1 second')
       WHERE "id" = ${executionId}
         AND "userId" = ${this.scope.userId}
@@ -377,6 +405,122 @@ export class PrismaExecutionRepository implements ExecutionRepository {
         AND ("executionLockExpiresAt" IS NULL OR "executionLockExpiresAt" <= CURRENT_TIMESTAMP OR "executionLockAgentId" = ${agentId})
       RETURNING "id"`;
     return rows.length === 1;
+  }
+
+  async claimExecutionAgent(input: {
+    manifest: AgentCapabilityManifest;
+    ttlSeconds: number;
+  }): Promise<ClaimExecutionAgentResult> {
+    const manifest = AgentCapabilityManifestSchema.parse(input.manifest);
+    this.assertPositiveTtl(input.ttlSeconds);
+
+    return this.client.$transaction(async (transaction) => {
+      const executions = await transaction.$queryRaw<
+        Array<{
+          executionLockAgentId: string | null;
+          executionLockSessionId: string | null;
+          lockActive: boolean;
+        }>
+      >`
+        SELECT "executionLockAgentId",
+               "executionLockSessionId",
+               ("executionLockExpiresAt" > CURRENT_TIMESTAMP) AS "lockActive"
+        FROM "Execution"
+        WHERE "id" = ${manifest.executionId}
+          AND "userId" = ${this.scope.userId}
+          AND "workspaceId" = ${this.scope.workspaceId}
+        FOR UPDATE`;
+      const execution = executions[0];
+      if (!execution) {
+        return "not_found";
+      }
+      if (execution.lockActive) {
+        if (execution.executionLockAgentId !== manifest.agentId) {
+          return "locked";
+        }
+        if (execution.executionLockSessionId !== manifest.sessionId) {
+          return "session_mismatch";
+        }
+      }
+      if (
+        !execution.lockActive &&
+        execution.executionLockSessionId !== null &&
+        (execution.executionLockAgentId !== manifest.agentId ||
+          execution.executionLockSessionId !== manifest.sessionId)
+      ) {
+        return "session_mismatch";
+      }
+
+      const existingAgent = await transaction.localAgent.findUnique({
+        where: { id: manifest.agentId }
+      });
+      if (existingAgent && existingAgent.workspaceId !== this.scope.workspaceId) {
+        return "agent_scope_mismatch";
+      }
+      const capabilities = {
+        contractVersion: manifest.contractVersion,
+        feishuCli: manifest.capabilities.feishuCli,
+        browser: manifest.capabilities.browser,
+        sessionId: manifest.sessionId,
+        executionId: manifest.executionId
+      };
+      await transaction.localAgent.upsert({
+        where: { id: manifest.agentId },
+        create: {
+          id: manifest.agentId,
+          workspaceId: this.scope.workspaceId,
+          version: manifest.pluginVersion,
+          capabilities,
+          lastHeartbeatAt: new Date()
+        },
+        update: {
+          version: manifest.pluginVersion,
+          capabilities,
+          lastHeartbeatAt: new Date()
+        }
+      });
+      await transaction.$executeRaw`
+        UPDATE "Execution"
+        SET "executionLockAgentId" = ${manifest.agentId},
+            "executionLockSessionId" = ${manifest.sessionId},
+            "executionLockExpiresAt" = CURRENT_TIMESTAMP + (${input.ttlSeconds} * INTERVAL '1 second')
+        WHERE "id" = ${manifest.executionId}
+          AND "userId" = ${this.scope.userId}
+          AND "workspaceId" = ${this.scope.workspaceId}`;
+      return "claimed";
+    });
+  }
+
+  async heartbeatExecutionAgent(input: {
+    executionId: string;
+    agentId: string;
+    sessionId: string;
+    ttlSeconds: number;
+  }): Promise<HeartbeatExecutionAgentResult> {
+    this.assertPositiveTtl(input.ttlSeconds);
+    return this.client.$transaction(async (transaction) => {
+      const executions = await transaction.$queryRaw<Array<{ id: string }>>`
+        UPDATE "Execution"
+        SET "executionLockExpiresAt" = CURRENT_TIMESTAMP + (${input.ttlSeconds} * INTERVAL '1 second')
+        WHERE "id" = ${input.executionId}
+          AND "userId" = ${this.scope.userId}
+          AND "workspaceId" = ${this.scope.workspaceId}
+          AND "executionLockAgentId" = ${input.agentId}
+          AND "executionLockSessionId" = ${input.sessionId}
+          AND "executionLockExpiresAt" > CURRENT_TIMESTAMP
+        RETURNING "id"`;
+      if (executions.length !== 1) {
+        return "lock_mismatch";
+      }
+      await transaction.localAgent.updateMany({
+        where: {
+          id: input.agentId,
+          workspaceId: this.scope.workspaceId
+        },
+        data: { lastHeartbeatAt: new Date() }
+      });
+      return "renewed";
+    });
   }
 
   async claimOperation(executionId: string, fingerprint: string): Promise<{ claimed: boolean; attempt?: number }> {
@@ -467,6 +611,12 @@ export class PrismaExecutionRepository implements ExecutionRepository {
 
     if (!execution) {
       throw new Error("execution not found in repository scope");
+    }
+  }
+
+  private assertPositiveTtl(ttlSeconds: number): void {
+    if (!Number.isInteger(ttlSeconds) || ttlSeconds <= 0) {
+      throw new Error("ttlSeconds must be a positive integer");
     }
   }
 

@@ -27,6 +27,22 @@ const OpaqueReferenceIdSchema = z
   .string()
   .regex(/^[a-z][a-z0-9_]{2,31}:[a-f0-9]{16,64}$/);
 
+export const AgentCapabilityManifestSchema = z
+  .object({
+    pluginVersion: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
+    contractVersion: z.literal("1"),
+    capabilities: z
+      .object({
+        feishuCli: z.literal(true),
+        browser: z.literal(true)
+      })
+      .strict(),
+    agentId: IdentifierSchema,
+    sessionId: IdentifierSchema,
+    executionId: IdentifierSchema
+  })
+  .strict();
+
 export const ExecutionStatusSchema = z.enum([
   "pending",
   "running",
@@ -240,6 +256,9 @@ function authoritativeEvidenceStatus(
 }
 
 export type ExecutionStatus = z.infer<typeof ExecutionStatusSchema>;
+export type AgentCapabilityManifest = z.infer<
+  typeof AgentCapabilityManifestSchema
+>;
 export type ExecutionPhase = z.infer<typeof ExecutionPhaseSchema>;
 export type ExecutionPacket = z.infer<typeof ExecutionPacketSchema>;
 export type ExecutionEvent = z.infer<typeof ExecutionEventSchema>;

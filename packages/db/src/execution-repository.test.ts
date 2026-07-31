@@ -97,6 +97,183 @@ describe("PrismaExecutionRepository", () => {
     await expect(repository.acquireLock(execution.id, "agent-2", 60)).resolves.toBe(false);
   });
 
+  it("atomically registers one exact plugin session and rejects lock contention", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+    const manifest = {
+      pluginVersion: "simulator-1.0.0",
+      contractVersion: "1" as const,
+      capabilities: { feishuCli: true as const, browser: true as const },
+      agentId: "agent-owner",
+      sessionId: "session-owner",
+      executionId: execution.id
+    };
+
+    await expect(
+      repository.claimExecutionAgent({ manifest, ttlSeconds: 60 })
+    ).resolves.toBe("claimed");
+    await expect(
+      repository.claimExecutionAgent({
+        manifest: {
+          ...manifest,
+          agentId: "agent-other",
+          sessionId: "session-other"
+        },
+        ttlSeconds: 60
+      })
+    ).resolves.toBe("locked");
+    await expect(
+      repository.claimExecutionAgent({
+        manifest: { ...manifest, sessionId: "session-duplicate" },
+        ttlSeconds: 60
+      })
+    ).resolves.toBe("session_mismatch");
+
+    await expect(
+      prisma.execution.findUniqueOrThrow({ where: { id: execution.id } })
+    ).resolves.toMatchObject({
+      executionLockAgentId: "agent-owner",
+      executionLockSessionId: "session-owner"
+    });
+    await expect(
+      prisma.localAgent.findUniqueOrThrow({ where: { id: "agent-owner" } })
+    ).resolves.toMatchObject({
+      workspaceId: "W-1",
+      version: "simulator-1.0.0",
+      capabilities: {
+        contractVersion: "1",
+        feishuCli: true,
+        browser: true,
+        sessionId: "session-owner",
+        executionId: execution.id
+      }
+    });
+  });
+
+  it("renews heartbeat only for the exact current session binding", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+    const manifest = {
+      pluginVersion: "simulator-1.0.0",
+      contractVersion: "1" as const,
+      capabilities: { feishuCli: true as const, browser: true as const },
+      agentId: "agent-owner",
+      sessionId: "session-owner",
+      executionId: execution.id
+    };
+    await repository.claimExecutionAgent({ manifest, ttlSeconds: 60 });
+
+    await expect(
+      repository.heartbeatExecutionAgent({
+        executionId: execution.id,
+        agentId: manifest.agentId,
+        sessionId: "session-wrong",
+        ttlSeconds: 60
+      })
+    ).resolves.toBe("lock_mismatch");
+    await expect(
+      repository.heartbeatExecutionAgent({
+        executionId: execution.id,
+        agentId: manifest.agentId,
+        sessionId: manifest.sessionId,
+        ttlSeconds: 60
+      })
+    ).resolves.toBe("renewed");
+
+    const heartbeat = await prisma.localAgent.findUniqueOrThrow({
+      where: { id: manifest.agentId }
+    });
+    expect(heartbeat.lastHeartbeatAt).toEqual(expect.any(Date));
+  });
+
+  it("accepts agent events only from the exact claimed session", async () => {
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+    const manifest = {
+      pluginVersion: "simulator-1.0.0",
+      contractVersion: "1" as const,
+      capabilities: { feishuCli: true as const, browser: true as const },
+      agentId: "agent-owner",
+      sessionId: "session-owner",
+      executionId: execution.id
+    };
+    await repository.claimExecutionAgent({ manifest, ttlSeconds: 60 });
+    const sourceEvent = {
+      ...event,
+      executionId: execution.id,
+      stepId: "source.parse" as const,
+      evidence: {
+        kind: "checkpoint" as const,
+        summary: { phase: "source_parse" as const, status: "running" as const },
+        reference: {
+          kind: "checkpoint" as const,
+          id: "checkpoint:eeeeeeeeeeeeeeee"
+        }
+      }
+    };
+    const append = (sessionId: string) =>
+      repository.appendStepEventForAgent({
+        agentId: manifest.agentId,
+        sessionId,
+        event: sourceEvent,
+        expectedState: { status: "pending", phase: "source_parse" },
+        nextState: { status: "running", phase: "source_parse" }
+      });
+
+    await expect(append("session-foreign")).resolves.toBe("lock_mismatch");
+    await expect(repository.listStepEvents(execution.id)).resolves.toEqual([]);
+    await expect(append("session-owner")).resolves.toBe("appended");
+  });
+
+  it("binds plugin sessions per execution instead of globally per agent", async () => {
+    const first = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1
+    });
+    const second = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 2
+    });
+    const baseManifest = {
+      pluginVersion: "simulator-1.0.0",
+      contractVersion: "1" as const,
+      capabilities: { feishuCli: true as const, browser: true as const },
+      agentId: "agent-owner"
+    };
+
+    await expect(
+      repository.claimExecutionAgent({
+        manifest: {
+          ...baseManifest,
+          sessionId: "session-first",
+          executionId: first.id
+        },
+        ttlSeconds: 60
+      })
+    ).resolves.toBe("claimed");
+    await expect(
+      repository.claimExecutionAgent({
+        manifest: {
+          ...baseManifest,
+          sessionId: "session-second",
+          executionId: second.id
+        },
+        ttlSeconds: 60
+      })
+    ).resolves.toBe("claimed");
+  });
+
   it("returns the locked agent heartbeat only inside the execution workspace", async () => {
     const execution = await repository.create({
       userId: "U-1",

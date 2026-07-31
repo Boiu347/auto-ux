@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type {
+  AgentCapabilityManifest,
   ConfirmationAction,
   ExecutionEvent,
   ExecutionPhase,
@@ -19,6 +20,8 @@ import { createExecutionCollectionHandlers } from "./route";
 import { createExecutionItemHandlers } from "./[executionId]/route";
 import { createConfirmationHandler } from "./[executionId]/confirmations/route";
 import { createEventsHandlers } from "./[executionId]/events/route";
+import { createAgentClaimHandler } from "./[executionId]/agent/claim/route";
+import { createAgentHeartbeatHandler } from "./[executionId]/agent/heartbeat/route";
 import { createDevelopmentSessionHandlers } from "../dev/session/route";
 
 const owner = { userId: "U-1", workspaceId: "W-1" };
@@ -966,6 +969,126 @@ describe("execution events API", () => {
     expect(response.status).toBe(201);
     expect(store.execution?.status).toBe("unknown");
   });
+
+  it("claims and heartbeats one exact compatible local-agent session", async () => {
+    const store = new MemoryExecutionStore();
+    store.execution = executionRecord();
+    const claim = createAgentClaimHandler(resolve(store));
+    const heartbeat = createAgentHeartbeatHandler(resolve(store));
+    const agentManifest = {
+      pluginVersion: "simulator-1.0.0",
+      contractVersion: "1",
+      capabilities: { feishuCli: true, browser: true },
+      agentId: "agent-owner",
+      sessionId: "session-owner",
+      executionId: "EX-1"
+    };
+
+    const claimed = await claim(
+      request("http://localhost/api/executions/EX-1/agent/claim", {
+        method: "POST",
+        body: JSON.stringify(agentManifest)
+      }),
+      context("EX-1")
+    );
+    expect(claimed.status).toBe(201);
+    await expect(claimed.json()).resolves.toMatchObject({
+      pluginSessionCount: 1,
+      configVersion: 1,
+      events: []
+    });
+
+    const renewed = await heartbeat(
+      request("http://localhost/api/executions/EX-1/agent/heartbeat", {
+        method: "POST",
+        body: JSON.stringify({
+          agentId: agentManifest.agentId,
+          sessionId: agentManifest.sessionId
+        })
+      }),
+      context("EX-1")
+    );
+    expect(renewed.status).toBe(200);
+    expect(store.lockSessionId).toBe("session-owner");
+    expect(store.heartbeatCount).toBe(1);
+
+    const events = createEventsHandlers(resolve(store));
+    const sourceEvent: ExecutionEvent = {
+      ...firstEvent,
+      stepId: "source.parse",
+      evidence: {
+        kind: "checkpoint",
+        summary: { phase: "source_parse", status: "running" },
+        reference: { kind: "checkpoint", id: "checkpoint:dddddddddddddddd" }
+      }
+    };
+    const postEvent = (sessionId: string) =>
+      events.POST(
+        request("http://localhost/api/executions/EX-1/events", {
+          method: "POST",
+          body: JSON.stringify({
+            agentId: agentManifest.agentId,
+            sessionId,
+            event: sourceEvent
+          })
+        }),
+        context("EX-1")
+      );
+    expect((await postEvent("session-foreign")).status).toBe(409);
+    expect((await postEvent("session-owner")).status).toBe(201);
+  });
+
+  it("rejects incompatible capability claims, contenders, foreign sessions, and tenants", async () => {
+    const store = new MemoryExecutionStore();
+    store.execution = executionRecord();
+    const claim = createAgentClaimHandler(resolve(store));
+    const heartbeat = createAgentHeartbeatHandler(resolve(store));
+    const manifest = {
+      pluginVersion: "simulator-1.0.0",
+      contractVersion: "1",
+      capabilities: { feishuCli: true, browser: true },
+      agentId: "agent-owner",
+      sessionId: "session-owner",
+      executionId: "EX-1"
+    };
+    const postClaim = (body: unknown, actor = owner) =>
+      claim(
+        requestAs(actor, "http://localhost/api/executions/EX-1/agent/claim", {
+          method: "POST",
+          body: JSON.stringify(body)
+        }),
+        context("EX-1")
+      );
+
+    expect(
+      (await postClaim({ ...manifest, contractVersion: "0" })).status
+    ).toBe(400);
+    expect((await postClaim(manifest)).status).toBe(201);
+    const contender = await postClaim({
+      ...manifest,
+      agentId: "agent-other",
+      sessionId: "session-other"
+    });
+    expect(contender.status).toBe(409);
+    await expect(contender.json()).resolves.toEqual({
+      code: "EXECUTION_LOCKED"
+    });
+
+    const foreignHeartbeat = await heartbeat(
+      request("http://localhost/api/executions/EX-1/agent/heartbeat", {
+        method: "POST",
+        body: JSON.stringify({
+          agentId: manifest.agentId,
+          sessionId: "session-foreign"
+        })
+      }),
+      context("EX-1")
+    );
+    expect(foreignHeartbeat.status).toBe(409);
+    expect(
+      (await postClaim(manifest, { userId: "U-2", workspaceId: "W-2" })).status
+    ).toBe(404);
+  });
 });
 
 function checkpointEvent(
@@ -1067,6 +1190,8 @@ class MemoryExecutionStore implements ExecutionDataStore {
   execution: ReturnType<typeof executionRecord> | null = null;
   events: PersistedStepEvent[] = [];
   lockAgentId: string | null = null;
+  lockSessionId: string | null = null;
+  heartbeatCount = 0;
   confirmations: Array<{
     confirmation: ConfirmationRecord;
     tokenHash: string;
@@ -1113,6 +1238,53 @@ class MemoryExecutionStore implements ExecutionDataStore {
     return this.agentHeartbeat;
   }
 
+  async claimExecutionAgent(input: {
+    manifest: AgentCapabilityManifest;
+    ttlSeconds: number;
+  }) {
+    if (!(await this.findExecution())) {
+      return "not_found" as const;
+    }
+    if (this.lockAgentId && this.lockAgentId !== input.manifest.agentId) {
+      return "locked" as const;
+    }
+    if (
+      this.lockAgentId === input.manifest.agentId &&
+      this.lockSessionId &&
+      this.lockSessionId !== input.manifest.sessionId
+    ) {
+      return "session_mismatch" as const;
+    }
+    this.lockAgentId = input.manifest.agentId;
+    this.lockSessionId = input.manifest.sessionId;
+    this.agentHeartbeat = {
+      agentId: input.manifest.agentId,
+      lastHeartbeatAt: new Date()
+    };
+    return "claimed" as const;
+  }
+
+  async heartbeatExecutionAgent(input: {
+    executionId: string;
+    agentId: string;
+    sessionId: string;
+    ttlSeconds: number;
+  }) {
+    if (
+      this.execution?.id !== input.executionId ||
+      this.lockAgentId !== input.agentId ||
+      this.lockSessionId !== input.sessionId
+    ) {
+      return "lock_mismatch" as const;
+    }
+    this.heartbeatCount += 1;
+    this.agentHeartbeat = {
+      agentId: input.agentId,
+      lastHeartbeatAt: new Date()
+    };
+    return "renewed" as const;
+  }
+
   async acquireLock(_executionId: string, agentId: string) {
     if (this.lockAgentId && this.lockAgentId !== agentId) {
       return false;
@@ -1123,6 +1295,7 @@ class MemoryExecutionStore implements ExecutionDataStore {
 
   async appendEventForAgent(input: {
     agentId: string;
+    sessionId?: string;
     event: ExecutionEvent;
     expectedState: { status: ExecutionStatus; phase: ExecutionPhase };
     nextState: { status: ExecutionStatus; phase: ExecutionPhase };
@@ -1135,6 +1308,9 @@ class MemoryExecutionStore implements ExecutionDataStore {
     };
   }) {
     if (this.lockAgentId !== input.agentId) {
+      return "lock_mismatch" as const;
+    }
+    if (this.lockSessionId !== null && this.lockSessionId !== input.sessionId) {
       return "lock_mismatch" as const;
     }
     if (

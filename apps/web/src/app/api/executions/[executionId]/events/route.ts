@@ -41,7 +41,8 @@ export function createEventsHandlers(
         await resolveService(user).appendEvent(
           body.agentId,
           body.event,
-          body.confirmation
+          body.confirmation,
+          body.sessionId
         );
         return NextResponse.json({ event: body.event }, { status: 201 });
       } catch (error) {

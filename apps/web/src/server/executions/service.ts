@@ -1,9 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
 
 import {
+  AgentCapabilityManifestSchema,
   ConfirmationActionSchema,
   ExecutionEventSchema,
   type ConfirmationAction,
+  type AgentCapabilityManifest,
   type ExecutionEvent,
   type ExecutionPhase,
   type ExecutionStatus
@@ -13,10 +15,12 @@ import {
   PrismaExecutionRepository,
   prisma,
   type AppendStepEventResult,
+  type ClaimExecutionAgentResult,
   type ConfirmationClaim,
   type ConfirmationRecord,
   type ExecutionAgentHeartbeat,
   type ExecutionRecord,
+  type HeartbeatExecutionAgentResult,
   type PersistedStepEvent,
   type RepositoryScope
 } from "@app/db";
@@ -51,6 +55,7 @@ export const CreateExecutionRequestSchema = z
 export const AppendExecutionEventRequestSchema = z
   .object({
     agentId: IdentifierSchema,
+    sessionId: IdentifierSchema.optional(),
     event: ExecutionEventSchema,
     confirmation: z
       .object({
@@ -72,6 +77,15 @@ export const CreateConfirmationRequestSchema = z
   })
   .strict();
 
+export const ClaimExecutionRequestSchema = AgentCapabilityManifestSchema;
+
+export const HeartbeatExecutionRequestSchema = z
+  .object({
+    agentId: IdentifierSchema,
+    sessionId: IdentifierSchema
+  })
+  .strict();
+
 export type ConfirmationProof = NonNullable<
   z.infer<typeof AppendExecutionEventRequestSchema>["confirmation"]
 >;
@@ -86,8 +100,19 @@ export interface ExecutionDataStore {
   findExecutionAgentHeartbeat(
     executionId: string
   ): Promise<ExecutionAgentHeartbeat | null>;
+  claimExecutionAgent(input: {
+    manifest: AgentCapabilityManifest;
+    ttlSeconds: number;
+  }): Promise<ClaimExecutionAgentResult>;
+  heartbeatExecutionAgent(input: {
+    executionId: string;
+    agentId: string;
+    sessionId: string;
+    ttlSeconds: number;
+  }): Promise<HeartbeatExecutionAgentResult>;
   appendEventForAgent(input: {
     agentId: string;
+    sessionId?: string;
     event: ExecutionEvent;
     expectedState: { status: ExecutionStatus; phase: ExecutionPhase };
     nextState: { status: ExecutionStatus; phase: ExecutionPhase };
@@ -116,7 +141,9 @@ type ExecutionServiceErrorCode =
   | "INVALID_EXECUTION_TRANSITION"
   | "CONFIRMATION_ACTION_MISMATCH"
   | "CONFIRMATION_CONFIG_MISMATCH"
-  | "CONFIRMATION_INVALID";
+  | "CONFIRMATION_INVALID"
+  | "EXECUTION_LOCKED"
+  | "DUPLICATE_PLUGIN_SESSION";
 
 export class ExecutionServiceError extends Error {
   constructor(
@@ -164,10 +191,48 @@ export class ExecutionService {
     };
   }
 
+  async claimExecution(manifest: AgentCapabilityManifest): Promise<{
+    pluginSessionCount: 1;
+    configVersion: number;
+    events: ExecutionEvent[];
+  }> {
+    const validated = AgentCapabilityManifestSchema.parse(manifest);
+    const execution = await this.requireExecution(validated.executionId);
+    const claim = await this.store.claimExecutionAgent({
+      manifest: validated,
+      ttlSeconds: 60
+    });
+    this.requireSuccessfulClaim(claim);
+    const events = await this.store.listEventsAfter(execution.id);
+    return {
+      pluginSessionCount: 1,
+      configVersion: execution.configVersion,
+      events: events.map(({ event }) => event)
+    };
+  }
+
+  async heartbeatExecution(
+    executionId: string,
+    agentId: string,
+    sessionId: string
+  ): Promise<void> {
+    await this.requireExecution(executionId);
+    const result = await this.store.heartbeatExecutionAgent({
+      executionId,
+      agentId,
+      sessionId,
+      ttlSeconds: 60
+    });
+    if (result !== "renewed") {
+      throw new ExecutionServiceError("EXECUTION_LOCK_MISMATCH", 409);
+    }
+  }
+
   async appendEvent(
     agentId: string,
     event: ExecutionEvent,
-    confirmation?: ConfirmationProof
+    confirmation?: ConfirmationProof,
+    sessionId?: string
   ): Promise<void> {
     const validatedEvent = ExecutionEventSchema.parse(event);
     const execution = await this.requireExecution(validatedEvent.executionId);
@@ -196,6 +261,7 @@ export class ExecutionService {
 
     const result = await this.store.appendEventForAgent({
       agentId,
+      sessionId,
       event: validatedEvent,
       expectedState: {
         status: execution.status,
@@ -349,6 +415,19 @@ export class ExecutionService {
     return execution;
   }
 
+  private requireSuccessfulClaim(result: ClaimExecutionAgentResult): void {
+    if (result === "claimed") {
+      return;
+    }
+    if (result === "not_found" || result === "agent_scope_mismatch") {
+      throw new ExecutionServiceError("EXECUTION_NOT_FOUND", 404);
+    }
+    if (result === "session_mismatch") {
+      throw new ExecutionServiceError("DUPLICATE_PLUGIN_SESSION", 409);
+    }
+    throw new ExecutionServiceError("EXECUTION_LOCKED", 409);
+  }
+
   private async preparePersistedConfirmation(
     execution: ExecutionRecord,
     proof: ConfirmationProof
@@ -445,8 +524,25 @@ class PrismaExecutionDataStore implements ExecutionDataStore {
     return this.repository.findExecutionAgentHeartbeat(executionId);
   }
 
+  claimExecutionAgent(input: {
+    manifest: AgentCapabilityManifest;
+    ttlSeconds: number;
+  }): Promise<ClaimExecutionAgentResult> {
+    return this.repository.claimExecutionAgent(input);
+  }
+
+  heartbeatExecutionAgent(input: {
+    executionId: string;
+    agentId: string;
+    sessionId: string;
+    ttlSeconds: number;
+  }): Promise<HeartbeatExecutionAgentResult> {
+    return this.repository.heartbeatExecutionAgent(input);
+  }
+
   appendEventForAgent(input: {
     agentId: string;
+    sessionId?: string;
     event: ExecutionEvent;
     expectedState: { status: ExecutionStatus; phase: ExecutionPhase };
     nextState: { status: ExecutionStatus; phase: ExecutionPhase };

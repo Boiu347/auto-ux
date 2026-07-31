@@ -124,6 +124,7 @@ model Execution {
   phase                  ExecutionPhase
   targetPolicy           TargetPolicy
   executionLockAgentId   String?
+  executionLockSessionId String?
   executionLockExpiresAt DateTime?
   createdAt              DateTime             @default(now())
   updatedAt              DateTime             @updatedAt

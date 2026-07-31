@@ -1,5 +1,6 @@
 export {
   ActionConfirmationSchema,
+  AgentCapabilityManifestSchema,
   ConfirmationActionSchema,
   ExecutionEvidenceSchema,
   ExecutionEventSchema,
@@ -10,6 +11,7 @@ export {
 
 export type {
   ActionConfirmation,
+  AgentCapabilityManifest,
   ConfirmationAction,
   ExecutionEvidence,
   ExecutionEvent,
