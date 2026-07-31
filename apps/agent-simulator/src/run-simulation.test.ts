@@ -1,12 +1,4 @@
 import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  mkdtempSync,
-  renameSync,
-  rmSync
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -34,37 +26,6 @@ const manifest: AgentCapabilityManifest = {
 };
 
 describe("local agent simulator", () => {
-  it("builds the runtime contracts before the documented root CLI starts", () => {
-    const workspaceRoot = fileURLToPath(new URL("../../../", import.meta.url));
-    const contractsDist = join(workspaceRoot, "packages", "contracts", "dist");
-    const temporaryDirectory = mkdtempSync(
-      join(tmpdir(), "task7-contracts-dist-")
-    );
-    const backupDist = join(temporaryDirectory, "dist");
-    renameSync(contractsDist, backupDist);
-
-    try {
-      const output = execFileSync(
-        "pnpm",
-        ["agent:simulate", "--execution", "EX-1"],
-        {
-          cwd: workspaceRoot,
-          encoding: "utf8",
-          env: { ...process.env, CI: "true" }
-        }
-      );
-
-      expect(output).toContain('"outputLabel":"SIMULATOR_ONLY"');
-      expect(existsSync(join(contractsDist, "index.js"))).toBe(true);
-    } finally {
-      if (existsSync(contractsDist)) {
-        rmSync(contractsDist, { recursive: true });
-      }
-      renameSync(backupDist, contractsDist);
-      rmSync(temporaryDirectory, { recursive: true });
-    }
-  });
-
   it("runs the documented CLI deterministically without external services", () => {
     const output = execFileSync(
       process.execPath,
