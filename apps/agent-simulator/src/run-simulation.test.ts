@@ -1,4 +1,10 @@
-import type { ExecutionEvent } from "@app/contracts";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+import {
+  AgentCapabilityManifestSchema,
+  type ExecutionEvent
+} from "@app/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -83,6 +89,33 @@ describe("local agent simulator", () => {
     expect(fakeApi.pluginSessionCount).toBe(0);
   });
 
+  it.each([
+    ["invalid agent id", { ...manifest, agentId: "agent invalid" }],
+    ["invalid session id", { ...manifest, sessionId: "session:invalid" }],
+    ["unknown top-level field", { ...manifest, rawFeishuDocument: "forbidden" }],
+    [
+      "unknown capability field",
+      {
+        ...manifest,
+        capabilities: {
+          ...manifest.capabilities,
+          navigateRealWebsite: true
+        }
+      }
+    ]
+  ])("rejects %s with the same strict manifest schema as the real API", async (_name, candidate) => {
+    expect(AgentCapabilityManifestSchema.safeParse(candidate).success).toBe(false);
+    const fakeApi = new FakeLocalApiClient();
+
+    await expect(
+      fakeApi.claimExecution(
+        "EX-1",
+        candidate as unknown as AgentCapabilityManifest
+      )
+    ).rejects.toMatchObject({ code: "EXECUTION_BINDING_MISMATCH" });
+    expect(fakeApi.pluginSessionCount).toBe(0);
+  });
+
   it("allows one atomic lock winner and rejects a contender", async () => {
     const persistence = new FakeLocalApiPersistence();
     const first = new FakeLocalApiClient({ persistence });
@@ -157,6 +190,99 @@ describe("local agent simulator", () => {
       stepId: "complete",
       status: "succeeded"
     });
+  });
+
+  it("renews the lease while a confirmation wait exceeds sixty seconds and stops heartbeats afterward", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-30T00:00:00.000Z"));
+    const persistence = new FakeLocalApiPersistence();
+    const fakeApi = new FakeLocalApiClient({
+      persistence,
+      now: () => new Date(Date.now())
+    });
+    const requestedActions: string[] = [];
+    let heartbeatCountBeforeWait = 0;
+    const confirmationBridge = {
+      async waitForConfirmation(request: { action: "publish" | "import_numbers" | "start_dial" }) {
+        requestedActions.push(request.action);
+        if (request.action === "publish") {
+          heartbeatCountBeforeWait = persistence.heartbeatCount;
+          await new Promise((resolve) => setTimeout(resolve, 65_000));
+        }
+        return fakeApi.issueConfirmation(request.action, manifest);
+      }
+    };
+
+    try {
+      const simulation = runSimulation({
+        executionId: "EX-1",
+        api: fakeApi,
+        mode: "full",
+        confirmationBridge
+      });
+      const completed = expect(simulation).resolves.toMatchObject({
+        finalStatus: "succeeded"
+      });
+      await vi.advanceTimersByTimeAsync(65_000);
+
+      await completed;
+      expect(requestedActions).toEqual([
+        "publish",
+        "import_numbers",
+        "start_dial"
+      ]);
+      expect(persistence.heartbeatCount).toBeGreaterThanOrEqual(
+        heartbeatCountBeforeWait + 2
+      );
+      const heartbeatCount = persistence.heartbeatCount;
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(persistence.heartbeatCount).toBe(heartbeatCount);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ["failure", new Error("confirmation bridge failed")],
+    ["abort", Object.assign(new Error("confirmation aborted"), { name: "AbortError" })]
+  ])("cleans up lease heartbeats after confirmation %s", async (_name, failure) => {
+    vi.useFakeTimers();
+    const fakeApi = new FakeLocalApiClient();
+    const confirmationBridge = {
+      async waitForConfirmation() {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        throw failure;
+      }
+    };
+
+    try {
+      const simulation = runSimulation({
+        executionId: "EX-1",
+        api: fakeApi,
+        mode: "full",
+        confirmationBridge
+      });
+      const rejected = expect(simulation).rejects.toBe(failure);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await rejected;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not leave a lease timer when returning at the publish gate", async () => {
+    vi.useFakeTimers();
+    try {
+      await expect(
+        runSimulation({ executionId: "EX-1", api: new FakeLocalApiClient() })
+      ).resolves.toMatchObject({ waitingFor: "publish" });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects a foreign confirmation without consuming it", async () => {
@@ -302,5 +428,3 @@ function checkpointEvent(
     nextAction: status === "unknown" ? "wait_for_user" : "stop"
   };
 }
-import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";

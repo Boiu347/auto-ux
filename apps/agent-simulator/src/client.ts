@@ -1,7 +1,8 @@
-import type {
-  ConfirmationAction,
-  ExecutionEvent,
-  ExecutionStatus
+import {
+  AgentCapabilityManifestSchema,
+  type ConfirmationAction,
+  type ExecutionEvent,
+  type ExecutionStatus
 } from "@app/contracts";
 
 export const SUPPORTED_CONTRACT_VERSION = "1";
@@ -418,20 +419,26 @@ function validateManifest(
   executionId: string,
   manifest: AgentCapabilityManifest
 ): void {
-  if (manifest.contractVersion !== SUPPORTED_CONTRACT_VERSION) {
+  const candidate = manifest as unknown as Record<string, unknown>;
+  const capabilities = candidate.capabilities;
+  const parsed = AgentCapabilityManifestSchema.safeParse(manifest);
+  if (parsed.success && parsed.data.executionId === executionId) {
+    return;
+  }
+  if (candidate.contractVersion !== SUPPORTED_CONTRACT_VERSION) {
     throw new AgentClientError("INCOMPATIBLE_CONTRACT");
   }
-  if (!manifest.capabilities.feishuCli || !manifest.capabilities.browser) {
+  if (
+    typeof capabilities !== "object" ||
+    capabilities === null ||
+    !("feishuCli" in capabilities) ||
+    !("browser" in capabilities) ||
+    capabilities.feishuCli !== true ||
+    capabilities.browser !== true
+  ) {
     throw new AgentClientError("MISSING_CAPABILITY");
   }
-  if (
-    !manifest.pluginVersion ||
-    !manifest.agentId ||
-    !manifest.sessionId ||
-    manifest.executionId !== executionId
-  ) {
-    throw new AgentClientError("EXECUTION_BINDING_MISMATCH");
-  }
+  throw new AgentClientError("EXECUTION_BINDING_MISMATCH");
 }
 
 function bindingOf(manifest: AgentCapabilityManifest) {

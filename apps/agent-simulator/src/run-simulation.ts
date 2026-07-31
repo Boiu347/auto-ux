@@ -12,6 +12,8 @@ import {
   SUPPORTED_CONTRACT_VERSION,
   type AgentCapabilityManifest,
   type ConfirmationBridge,
+  type ConfirmationDelivery,
+  type ConfirmationRequest,
   type LocalApiClient,
   type SimulationResult
 } from "./client.ts";
@@ -28,6 +30,8 @@ interface FlowEvent {
   event: ExecutionEvent;
   confirmationAction?: ConfirmationAction;
 }
+
+const CONFIRMATION_HEARTBEAT_INTERVAL_MS = 30_000;
 
 export async function runSimulation(
   options: RunSimulationOptions
@@ -66,12 +70,17 @@ export async function runSimulation(
           next.confirmationAction
         );
       }
-      confirmation = await options.confirmationBridge.waitForConfirmation({
-        action: next.confirmationAction,
-        executionId: options.executionId,
-        configVersion: claimed.configVersion,
-        agentId: manifest.agentId,
-        sessionId: manifest.sessionId
+      confirmation = await waitForConfirmationWithLease({
+        api: options.api,
+        bridge: options.confirmationBridge,
+        manifest,
+        request: {
+          action: next.confirmationAction,
+          executionId: options.executionId,
+          configVersion: claimed.configVersion,
+          agentId: manifest.agentId,
+          sessionId: manifest.sessionId
+        }
       });
     }
 
@@ -80,6 +89,42 @@ export async function runSimulation(
   }
 
   return result(claimed.pluginSessionCount, "succeeded");
+}
+
+async function waitForConfirmationWithLease(input: {
+  api: LocalApiClient;
+  bridge: ConfirmationBridge;
+  manifest: AgentCapabilityManifest;
+  request: ConfirmationRequest;
+}): Promise<ConfirmationDelivery> {
+  let heartbeatInFlight: Promise<void> | undefined;
+  let rejectHeartbeatFailure: (error: unknown) => void = () => undefined;
+  const heartbeatFailure = new Promise<never>((_resolve, reject) => {
+    rejectHeartbeatFailure = reject;
+  });
+  const timer = setInterval(() => {
+    if (heartbeatInFlight) {
+      return;
+    }
+    heartbeatInFlight = input.api
+      .heartbeatExecution(input.request.executionId, input.manifest)
+      .catch((error: unknown) => {
+        rejectHeartbeatFailure(error);
+      })
+      .finally(() => {
+        heartbeatInFlight = undefined;
+      });
+  }, CONFIRMATION_HEARTBEAT_INTERVAL_MS);
+
+  try {
+    return await Promise.race([
+      input.bridge.waitForConfirmation(input.request),
+      heartbeatFailure
+    ]);
+  } finally {
+    clearInterval(timer);
+    await heartbeatInFlight;
+  }
 }
 
 function simulationFlow(executionId: string): FlowEvent[] {
