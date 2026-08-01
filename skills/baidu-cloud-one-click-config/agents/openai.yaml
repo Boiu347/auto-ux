@@ -1,0 +1,4 @@
+interface:
+  display_name: "百度云一键配置"
+  short_description: "从需求资料安全创建、配置、发布并拨测百度云外呼机器人"
+  default_prompt: "使用 $baidu-cloud-one-click-config 读取需求资料并安全完成百度云外呼机器人配置。"
