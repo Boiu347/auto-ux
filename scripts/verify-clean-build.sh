@@ -42,6 +42,13 @@ for WORKSPACE in \
   cp -a "$PROJECT_ROOT/$WORKSPACE/node_modules" "$TEMP_ROOT/$WORKSPACE/node_modules"
 done
 
+# A Railway build starts without a generated Prisma Client. Remove the local
+# generated artifact from this fixture so the production build must create it.
+find "$TEMP_ROOT/node_modules/.pnpm" \
+  -path '*/node_modules/.prisma/client' \
+  -type d \
+  -exec rm -rf {} +
+
 if [ -e packages/contracts/dist ] || [ -e packages/execution-core/dist ]; then
   echo "clean build fixture unexpectedly contains dist artifacts" >&2
   exit 1

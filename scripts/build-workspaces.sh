@@ -10,6 +10,7 @@ cd "$PROJECT_ROOT/packages/execution-core"
 ./node_modules/.bin/tsc -p tsconfig.build.json
 
 cd "$PROJECT_ROOT/packages/db"
+./node_modules/.bin/prisma generate --schema prisma/schema.prisma
 ./node_modules/.bin/tsc --noEmit
 
 cd "$PROJECT_ROOT/apps/agent-simulator"
