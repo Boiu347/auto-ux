@@ -6,6 +6,7 @@ import type {
   ExecutionStatus
 } from "@app/contracts";
 import {
+  Button,
   FluentProvider,
   MessageBar,
   MessageBarBody,
@@ -19,6 +20,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ConfirmationPanel } from "./confirmation-panel";
+import { DeviceDeliveryStatus } from "../devices/device-delivery-status";
 import { CurrentActionCard } from "./current-action-card";
 import { EvidenceCard } from "./evidence-card";
 import {
@@ -310,6 +312,9 @@ export function HybridProgress({
         <div className="dashboard-layout">
           <PhaseRail events={events.map(({ event }) => event)} />
           <section className="dashboard-content" aria-label="当前执行详情">
+            {execution.mode === "real_codex" ? (
+              <DeviceDeliveryStatus executionId={execution.id} />
+            ) : null}
             {events.length === 0 ? (
               <div className="empty-events">
                 <Text weight="semibold">暂无持久化执行事件</Text>
@@ -322,7 +327,7 @@ export function HybridProgress({
               lastCheckpoint={lastCheckpoint}
             />
             {execution.mode === "real_codex" ? (
-              <RealConfirmationNotice execution={execution} event={currentEvent} />
+              <RemoteConfirmationPanel execution={execution} event={currentEvent} />
             ) : (
               <ConfirmationPanel
                 key={`${execution.id}:${execution.configVersion}:${execution.phase}:${execution.status}`}
@@ -339,26 +344,81 @@ export function HybridProgress({
   );
 }
 
-function RealConfirmationNotice({
+const remoteConfirmationByPhase: Partial<Record<ExecutionPhase, {
+  action: "publish" | "import_numbers" | "start_dial";
+  approve: string;
+  reject: string;
+}>> = {
+  publish_confirm: { action: "publish", approve: "确认发布", reject: "拒绝发布" },
+  numbers_confirm: { action: "import_numbers", approve: "确认导入号码", reject: "拒绝导入号码" },
+  dial_confirm: { action: "start_dial", approve: "确认开始外呼", reject: "拒绝开始外呼" }
+};
+
+function RemoteConfirmationPanel({
   execution,
   event
 }: {
   execution: ExecutionSummary;
   event?: ExecutionEvent;
 }) {
-  const label: Partial<Record<ExecutionPhase, string>> = {
-    publish_confirm: "请回到 Codex 确认发布",
-    numbers_confirm: "请回到 Codex 确认导入号码",
-    dial_confirm: "请回到 Codex 确认开始外呼"
-  };
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<{ action: string; message: string }>();
   const waiting =
     execution.status === "waiting_confirmation" &&
     event?.status === "waiting_confirmation";
+  const current = remoteConfirmationByPhase[execution.phase];
+  useEffect(() => {
+    if (!waiting || !current) return;
+    let disposed = false;
+    void fetch(`/api/executions/${encodeURIComponent(execution.id)}/decision?action=${current.action}`)
+      .then(async (response) => response.status === 204 ? null : response.json())
+      .then((value: { decision?: string } | null) => {
+        if (!disposed && value?.decision) {
+          setResult({
+            action: current.action,
+            message: value.decision === "approved" ? "已确认，正在通知 Codex" : "已拒绝，正在通知 Codex 停止"
+          });
+        }
+      })
+      .catch(() => undefined);
+    return () => { disposed = true; };
+  }, [current, execution.id, waiting]);
+  const decide = async (decision: "approved" | "rejected") => {
+    if (!current || submitting) return;
+    setSubmitting(true);
+    try {
+      const response = await fetch(`/api/executions/${encodeURIComponent(execution.id)}/decision`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: current.action, decision })
+      });
+      const value = (await response.json().catch(() => ({}))) as { decision?: string; code?: string };
+      if (!response.ok) throw new Error(value.code ?? "确认提交失败");
+      setResult({
+        action: current.action,
+        message: value.decision === "approved" ? "已确认，正在通知 Codex" : "已拒绝，正在通知 Codex 停止"
+      });
+    } catch (cause) {
+      setResult({
+        action: current.action,
+        message: cause instanceof Error ? cause.message : "确认提交失败"
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
   return (
     <section className="dashboard-panel real-confirmation-notice" aria-live="polite">
       <Text as="h2" weight="semibold" size={500}>下一确认门</Text>
-      <Text>{waiting ? (label[execution.phase] ?? "请回到 Codex 继续确认") : "当前无需确认"}</Text>
-      <Text size={200}>高风险操作只在本次 Codex 任务中确认，网站不会代替你授权。</Text>
+      <Text>{waiting && current ? `${current.approve}？也可以在 Codex 中确认，先提交的一端生效。` : "当前无需确认"}</Text>
+      {waiting && current && result?.action !== current.action ? (
+        <div className="confirmation-actions">
+          <Button appearance="primary" disabled={submitting} onClick={() => void decide("approved")}>{current.approve}</Button>
+          <Button disabled={submitting} onClick={() => void decide("rejected")}>{current.reject}</Button>
+        </div>
+      ) : null}
+      {result?.action === current?.action ? <MessageBar><MessageBarBody>{result?.message}</MessageBarBody></MessageBar> : null}
+      <Text size={200}>发布、号码导入和开始外呼仍需分别确认，单次确认不会跨步骤复用。</Text>
     </section>
   );
 }

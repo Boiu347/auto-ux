@@ -1005,6 +1005,7 @@ describe("execution events API", () => {
         }
       }
     ];
+    store.approvedDecisions.set("publish", new Date("2026-08-06T09:59:30.000Z"));
     const service = new ExecutionService(
       store,
       () => new Date("2026-08-06T10:00:00.000Z")
@@ -1513,6 +1514,7 @@ class MemoryExecutionStore implements ExecutionDataStore {
     confirmation: ConfirmationRecord;
     tokenHash: string;
   }> = [];
+  approvedDecisions = new Map<ConfirmationAction, Date>();
   failEventListing = false;
   agentHeartbeat: {
     agentId: string;
@@ -1559,6 +1561,11 @@ class MemoryExecutionStore implements ExecutionDataStore {
 
   async findExecutionAgentHeartbeat() {
     return this.agentHeartbeat;
+  }
+
+  async findApprovedConfirmationDecision(input: { action: ConfirmationAction }) {
+    const decidedAt = this.approvedDecisions.get(input.action);
+    return decidedAt ? { decidedAt } : null;
   }
 
   async claimExecutionAgent(input: {

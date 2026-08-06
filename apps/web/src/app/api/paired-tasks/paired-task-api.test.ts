@@ -1,0 +1,83 @@
+import { describe, expect, it, vi } from "vitest";
+
+import { createPairedTaskHandler } from "./route";
+
+describe("paired task API", () => {
+  it("creates a real execution and queues its bounded Codex prompt", async () => {
+    const getBrowserScope = vi.fn().mockResolvedValue({
+      pairingId: "Pairing_1",
+      userId: "User_1",
+      workspaceId: "Workspace_1",
+      agentId: "MacAgent_1"
+    });
+    const createExecution = vi.fn().mockResolvedValue({
+      execution: { id: "Execution_1" },
+      agentToken: `execution_token:${"a".repeat(64)}`
+    });
+    const enqueueTask = vi.fn().mockResolvedValue({
+      id: "Task_1",
+      status: "queued"
+    });
+    const handler = createPairedTaskHandler({
+      getBrowserScope,
+      createExecution,
+      enqueueTask
+    });
+    const response = await handler(
+      new Request("https://auto-ux.example/api/paired-tasks", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: `paired_browser=browser_token:${"b".repeat(64)}`
+        },
+        body: JSON.stringify({
+          requestId: "request_1234567890abcdef",
+          feishuUrls: ["https://guanghe.feishu.cn/docx/ABC123"],
+          requirements: "创建一个新的回访机器人",
+          phoneFilePath: "/Users/demo/phones.xlsx",
+          robotName: "八月回访"
+        })
+      })
+    );
+
+    expect(response.status).toBe(201);
+    const payload = await response.json();
+    expect(payload).toEqual({
+      executionId: "Execution_1",
+      taskId: "Task_1",
+      status: "queued"
+    });
+    expect(createExecution).toHaveBeenCalledWith(
+      { userId: "User_1", workspaceId: "Workspace_1" },
+      expect.objectContaining({ mode: "real_codex", configVersion: 1 })
+    );
+    expect(enqueueTask).toHaveBeenCalledWith(
+      `browser_token:${"b".repeat(64)}`,
+      expect.objectContaining({
+        executionId: "Execution_1",
+        phoneFilePath: "/Users/demo/phones.xlsx",
+        prompt: expect.stringContaining("$baidu-cloud-one-click-config")
+      })
+    );
+    const queuedPrompt = enqueueTask.mock.calls[0]?.[1]?.prompt as string;
+    expect(queuedPrompt).toContain("__AUTO_UX_EXECUTION_TOKEN__");
+    expect(queuedPrompt).not.toContain("execution_token:");
+    expect(JSON.stringify(payload)).not.toContain("execution_token:");
+  });
+
+  it("rejects an unpaired browser", async () => {
+    const handler = createPairedTaskHandler({
+      getBrowserScope: vi.fn(),
+      createExecution: vi.fn(),
+      enqueueTask: vi.fn()
+    });
+    const response = await handler(
+      new Request("https://auto-ux.example/api/paired-tasks", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}"
+      })
+    );
+    expect(response.status).toBe(401);
+  });
+});

@@ -11,10 +11,10 @@
     "e2e": "./scripts/run-e2e.sh",
     "build": "./scripts/build-workspaces.sh",
     "test": "pnpm test:scripts && pnpm --filter @app/contracts test && pnpm --filter @app/execution-core test && pnpm --filter @app/db test && pnpm --filter @app/agent-simulator test && pnpm --filter @app/web test",
-    "test:scripts": "./tests/integration/process-ownership.test.sh",
+    "test:scripts": "./tests/integration/process-ownership.test.sh && node --test scripts/mac-agent.test.mjs && PYTHONPYCACHEPREFIX=/tmp/auto-ux-pycache python3 -m unittest tests/report_progress_test.py",
     "typecheck": "pnpm --filter @app/contracts typecheck && pnpm --filter @app/execution-core typecheck && pnpm --filter @app/db typecheck && pnpm --filter @app/agent-simulator typecheck && pnpm --filter @app/web typecheck",
     "lint": "pnpm -r --if-present lint",
-    "start": "pnpm --filter @app/web start",
+    "start": "pnpm --filter @app/db exec prisma migrate deploy --schema prisma/schema.prisma && pnpm --filter @app/web start",
     "verify:clean-build": "./scripts/verify-clean-build.sh"
   },
   "devDependencies": {

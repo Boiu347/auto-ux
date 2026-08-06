@@ -135,4 +135,40 @@ describe("RealExecutionForm", () => {
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining("独立模式"));
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("queues a paired Railway task instead of copying a prompt", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      executionId: "EX-PAIRED",
+      taskId: "Task_1",
+      status: "queued"
+    }, { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <RealExecutionForm
+        apiBaseUrl="https://auto-ux.example"
+        localLaunchEnabled={false}
+        pairedDeviceReady
+      />
+    );
+    fireEvent.change(screen.getByLabelText(/飞书文档链接/), {
+      target: { value: "https://guanghe.feishu.cn/docx/ABC" }
+    });
+    fireEvent.change(screen.getByLabelText(/补充需求/), {
+      target: { value: "配置机器人" }
+    });
+    fireEvent.change(screen.getByLabelText(/本地号码文件路径/), {
+      target: { value: "/Users/demo/phones.xlsx" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "一键发送到 Mac Codex" }));
+
+    await screen.findByText("任务已进入 Mac 队列");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/paired-tasks",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(screen.getByRole("link", { name: "查看任务页面" })).toHaveAttribute(
+      "href",
+      "/executions/EX-PAIRED"
+    );
+  });
 });

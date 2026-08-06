@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 
-import {
-  getCurrentUser,
-  type CurrentUser
-} from "../../../../../server/auth/current-user";
+import type { CurrentUser } from "../../../../../server/auth/current-user";
+import { getRequestUser } from "../../../../../server/auth/request-user";
 import {
   AppendExecutionEventRequestSchema,
   createExecutionService,
@@ -17,7 +15,7 @@ type RouteContext = {
 };
 
 type ResolveService = (user: CurrentUser) => ExecutionService;
-type Authenticate = (request: Request) => CurrentUser | null;
+type Authenticate = (request: Request) => CurrentUser | null | Promise<CurrentUser | null>;
 type AuthenticateAgent = (
   request: Request,
   executionId: string
@@ -27,7 +25,7 @@ const executionAgentAuthenticator = createExecutionAgentAuthenticator();
 
 export function createEventsHandlers(
   resolveService: ResolveService,
-  authenticate: Authenticate = getCurrentUser,
+  authenticate: Authenticate = getRequestUser,
   authenticateAgent: AuthenticateAgent = (request, executionId) =>
     executionAgentAuthenticator.authenticate(request, executionId)
 ) {
@@ -36,7 +34,7 @@ export function createEventsHandlers(
       const { executionId } = await routeContext.params;
       const user = request.headers.has("authorization")
         ? await authenticateAgent(request, executionId)
-        : authenticate(request);
+        : await authenticate(request);
       if (!user) {
         return errorResponse("UNAUTHENTICATED", 401);
       }
@@ -63,7 +61,7 @@ export function createEventsHandlers(
     },
 
     async GET(request: Request, routeContext: RouteContext): Promise<Response> {
-      const user = authenticate(request);
+      const user = await authenticate(request);
       if (!user) {
         return errorResponse("UNAUTHENTICATED", 401);
       }

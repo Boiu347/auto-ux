@@ -69,24 +69,44 @@ enum AuditAction {
   start_dial
 }
 
+enum DeviceTaskStatus {
+  queued
+  claimed
+  codex_opened
+  prompt_sent
+  failed
+}
+
+enum ConfirmationDecisionValue {
+  approved
+  rejected
+}
+
+enum ConfirmationDecisionSource {
+  website
+  codex
+}
+
 model User {
-  id            String         @id
-  createdAt     DateTime       @default(now())
-  executions    Execution[]    @relation("ExecutionUser")
-  configDrafts  ConfigDraft[]  @relation("ConfigDraftAuthor")
-  confirmations Confirmation[] @relation("ConfirmationUser")
-  auditEvents   AuditEvent[]   @relation("AuditActor")
+  id             String          @id
+  createdAt      DateTime        @default(now())
+  executions     Execution[]     @relation("ExecutionUser")
+  configDrafts   ConfigDraft[]   @relation("ConfigDraftAuthor")
+  confirmations  Confirmation[]  @relation("ConfirmationUser")
+  auditEvents    AuditEvent[]    @relation("AuditActor")
+  devicePairings DevicePairing[] @relation("DevicePairingUser")
 }
 
 model Workspace {
-  id            String         @id
-  createdAt     DateTime       @default(now())
-  localAgents   LocalAgent[]
-  configDrafts  ConfigDraft[]
-  executions    Execution[]
-  confirmations Confirmation[]
-  robotBindings RobotBinding[]
-  auditEvents   AuditEvent[]
+  id             String          @id
+  createdAt      DateTime        @default(now())
+  localAgents    LocalAgent[]
+  configDrafts   ConfigDraft[]
+  executions     Execution[]
+  confirmations  Confirmation[]
+  robotBindings  RobotBinding[]
+  auditEvents    AuditEvent[]
+  devicePairings DevicePairing[]
 }
 
 model LocalAgent {
@@ -121,32 +141,34 @@ model ConfigDraft {
 }
 
 model Execution {
-  id                     String               @id
+  id                     String                 @id
   userId                 String
   workspaceId            String
   configVersion          Int
   status                 ExecutionStatus
   phase                  ExecutionPhase
   targetPolicy           TargetPolicy
-  mode                   ExecutionMode        @default(simulator)
-  agentAccessTokenHash   String?              @unique
+  mode                   ExecutionMode          @default(simulator)
+  agentAccessTokenHash   String?                @unique
   agentAccessExpiresAt   DateTime?
   executionLockAgentId   String?
   executionLockSessionId String?
   executionLockExpiresAt DateTime?
-  createdAt              DateTime             @default(now())
-  updatedAt              DateTime             @updatedAt
-  user                   User                 @relation("ExecutionUser", fields: [userId], references: [id], onDelete: Restrict)
-  workspace              Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+  user                   User                   @relation("ExecutionUser", fields: [userId], references: [id], onDelete: Restrict)
+  workspace              Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   steps                  ExecutionStep[]
   operations             ExecutionOperation[]
-  confirmations          Confirmation[]       @relation("ConfirmationExecution")
-  scopedConfirmations    Confirmation[]       @relation("ConfirmationExecutionScope")
-  robotBindings          RobotBinding[]       @relation("RobotBindingExecution")
-  scopedRobotBindings    RobotBinding[]       @relation("RobotBindingExecutionScope")
-  auditEvents            AuditEvent[]         @relation("AuditExecution")
-  scopedAuditEvents      AuditEvent[]         @relation("AuditExecutionScope")
-  member                 WorkspaceMember      @relation("ExecutionMember", fields: [userId, workspaceId], references: [userId, workspaceId], onDelete: Restrict, onUpdate: NoAction, map: "Execution_member_fkey")
+  confirmations          Confirmation[]         @relation("ConfirmationExecution")
+  scopedConfirmations    Confirmation[]         @relation("ConfirmationExecutionScope")
+  robotBindings          RobotBinding[]         @relation("RobotBindingExecution")
+  scopedRobotBindings    RobotBinding[]         @relation("RobotBindingExecutionScope")
+  auditEvents            AuditEvent[]           @relation("AuditExecution")
+  scopedAuditEvents      AuditEvent[]           @relation("AuditExecutionScope")
+  member                 WorkspaceMember        @relation("ExecutionMember", fields: [userId, workspaceId], references: [userId, workspaceId], onDelete: Restrict, onUpdate: NoAction, map: "Execution_member_fkey")
+  deviceTask             DeviceTask?
+  confirmationDecisions  ConfirmationDecision[]
 
   @@unique([id, userId, workspaceId])
   @@unique([id, workspaceId])
@@ -203,20 +225,79 @@ model Confirmation {
   workspace       Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   member          WorkspaceMember    @relation("ConfirmationMember", fields: [userId, workspaceId], references: [userId, workspaceId], onDelete: Restrict, onUpdate: NoAction, map: "Confirmation_member_fkey")
 
+  @@unique([tokenHash])
   @@index([executionId, expiresAt])
   @@index([userId, workspaceId])
-  @@unique([tokenHash])
 }
 
 model WorkspaceMember {
-  userId        String
-  workspaceId   String
-  createdAt     DateTime       @default(now())
-  executions    Execution[]    @relation("ExecutionMember")
-  confirmations Confirmation[] @relation("ConfirmationMember")
-  auditEvents   AuditEvent[]   @relation("AuditMember")
+  userId         String
+  workspaceId    String
+  createdAt      DateTime        @default(now())
+  executions     Execution[]     @relation("ExecutionMember")
+  confirmations  Confirmation[]  @relation("ConfirmationMember")
+  auditEvents    AuditEvent[]    @relation("AuditMember")
+  devicePairings DevicePairing[] @relation("DevicePairingMember")
 
   @@id([userId, workspaceId])
+}
+
+model DevicePairing {
+  id               String          @id
+  userId           String
+  workspaceId      String
+  codeHash         String          @unique
+  browserTokenHash String          @unique
+  deviceTokenHash  String?         @unique
+  agentId          String?
+  version          String?
+  expiresAt        DateTime
+  claimedAt        DateTime?
+  lastSeenAt       DateTime?
+  createdAt        DateTime        @default(now())
+  user             User            @relation("DevicePairingUser", fields: [userId], references: [id], onDelete: Cascade)
+  workspace        Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  member           WorkspaceMember @relation("DevicePairingMember", fields: [userId, workspaceId], references: [userId, workspaceId], onDelete: Cascade, onUpdate: NoAction)
+  tasks            DeviceTask[]
+
+  @@index([workspaceId, createdAt])
+  @@index([lastSeenAt])
+}
+
+model DeviceTask {
+  id             String           @id
+  pairingId      String
+  requestId      String
+  executionId    String           @unique
+  prompt         String
+  phoneFilePath  String
+  status         DeviceTaskStatus @default(queued)
+  attempt        Int              @default(0)
+  claimTokenHash String?
+  leaseExpiresAt DateTime?
+  errorCode      String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  pairing        DevicePairing    @relation(fields: [pairingId], references: [id], onDelete: Cascade)
+  execution      Execution        @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@unique([pairingId, requestId])
+  @@index([pairingId, status, createdAt])
+  @@index([leaseExpiresAt])
+}
+
+model ConfirmationDecision {
+  id          String                     @id @default(cuid())
+  executionId String
+  action      ConfirmationAction
+  decision    ConfirmationDecisionValue
+  source      ConfirmationDecisionSource
+  decidedAt   DateTime
+  createdAt   DateTime                   @default(now())
+  execution   Execution                  @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@unique([executionId, action])
+  @@index([executionId, decidedAt])
 }
 
 model RobotBinding {

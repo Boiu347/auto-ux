@@ -16,6 +16,7 @@ export default function HomePage() {
       localLaunchEnabled={
         nonProductionAdapter && process.env.AUTO_UX_LOCAL_CODEX_LAUNCH === "1"
       }
+      cloudPairingEnabled={!nonProductionAdapter}
     />
   );
 }

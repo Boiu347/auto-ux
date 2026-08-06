@@ -96,6 +96,30 @@ a {
   padding: 8px;
 }
 
+.mac-pairing-card {
+  width: min(100%, 900px);
+  margin-bottom: 20px;
+  padding: 8px;
+}
+
+.pairing-instructions {
+  display: grid;
+  gap: 12px;
+}
+
+.pairing-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 30px;
+  letter-spacing: 0.18em;
+}
+
+.install-command {
+  overflow-wrap: anywhere;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--colorNeutralBackground3);
+}
+
 .real-execution-form {
   display: grid;
   gap: 18px;
@@ -129,6 +153,12 @@ a {
   gap: 10px;
   padding: 20px;
   background: var(--colorNeutralBackground1);
+}
+
+.confirmation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .confirmation-panel button {

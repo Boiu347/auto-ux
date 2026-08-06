@@ -129,4 +129,27 @@ describe.sequential("database migrations", () => {
     },
     120_000
   );
+
+  it(
+    "creates durable Mac pairing, task lease, and confirmation decision storage",
+    () => {
+      const name = createDatabase("mac_pairing");
+      const url = databaseUrl(name);
+
+      prisma(["migrate", "deploy"], url);
+
+      expect(
+        psql(
+          name,
+          `
+            SELECT
+              to_regclass('public."DevicePairing"') IS NOT NULL,
+              to_regclass('public."DeviceTask"') IS NOT NULL,
+              to_regclass('public."ConfirmationDecision"') IS NOT NULL;
+          `
+        ).trim()
+      ).toBe("t|t|t");
+    },
+    120_000
+  );
 });

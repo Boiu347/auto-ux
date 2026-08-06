@@ -181,7 +181,7 @@ describe("HybridProgress", () => {
     }
   );
 
-  it("sends real execution confirmations back to Codex without a website button", () => {
+  it("lets the website decide a real execution confirmation gate", () => {
     render(
       <HybridProgress
         execution={{
@@ -203,10 +203,9 @@ describe("HybridProgress", () => {
       />
     );
 
-    expect(screen.getByText("请回到 Codex 确认发布")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "确认发布" })
-    ).not.toBeInTheDocument();
+    expect(screen.getByText(/也可以在 Codex 中确认/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认发布" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "拒绝发布" })).toBeEnabled();
   });
 
   it("does not expose a confirmation from a cross-action event", () => {

@@ -1,0 +1,64 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { readFile } from "node:fs/promises";
+
+import { deliverTask, pollOnce } from "./mac-agent.mjs";
+
+const task = {
+  id: "Task_1",
+  claimToken: `task_claim:${"a".repeat(64)}`,
+  prompt: "Use the skill",
+  phoneFilePath: "/Users/demo/phones.xlsx"
+};
+
+test("deliverTask opens Codex before pasting and automatically sending", async () => {
+  const calls = [];
+  const result = await deliverTask(task, {
+    fileExists: async () => true,
+    copyPrompt: async (prompt) => calls.push(["copy", prompt]),
+    openCodex: async () => calls.push(["open"]),
+    pasteAndSend: async () => calls.push(["send"]),
+    setStatus: async (status) => calls.push(["status", status])
+  });
+
+  assert.equal(result, "prompt_sent");
+  assert.deepEqual(calls, [
+    ["copy", "Use the skill"],
+    ["open"],
+    ["status", "codex_opened"],
+    ["send"],
+    ["status", "prompt_sent"]
+  ]);
+});
+
+test("deliverTask reports a missing local number file without opening Codex", async () => {
+  const calls = [];
+  const result = await deliverTask(task, {
+    fileExists: async () => false,
+    copyPrompt: async () => calls.push(["copy"]),
+    openCodex: async () => calls.push(["open"]),
+    pasteAndSend: async () => calls.push(["send"]),
+    setStatus: async (status, errorCode) =>
+      calls.push(["status", status, errorCode])
+  });
+
+  assert.equal(result, "failed");
+  assert.deepEqual(calls, [["status", "failed", "PHONE_FILE_NOT_FOUND"]]);
+});
+
+test("pollOnce treats an empty queue as healthy idle state", async () => {
+  const request = async () => new Response(null, { status: 204 });
+  assert.equal(
+    await pollOnce(
+      { apiBaseUrl: "https://auto-ux.example", deviceToken: `device_token:${"b".repeat(64)}` },
+      { request }
+    ),
+    "idle"
+  );
+});
+
+test("installer installs both the Mac helper and the Codex skill", async () => {
+  const installer = await readFile(new URL("./install-mac-agent.sh", import.meta.url), "utf8");
+  assert.match(installer, /\.codex\/skills\/baidu-cloud-one-click-config/);
+  assert.match(installer, /SOURCE_ARCHIVE_URL/);
+});

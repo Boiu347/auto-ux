@@ -167,6 +167,10 @@ export interface ExecutionDataStore {
     | { status: "lock_mismatch" }
   >;
   findConfirmation(input: ConfirmationClaim): Promise<ConfirmationRecord | null>;
+  findApprovedConfirmationDecision(input: {
+    executionId: string;
+    action: ConfirmationAction;
+  }): Promise<{ decidedAt: Date } | null>;
 }
 
 type ExecutionServiceErrorCode =
@@ -610,6 +614,13 @@ export class ExecutionService {
     if (confirmedAt.getTime() < gateOpenedAt.getTime()) {
       throw new ExecutionServiceError("CONFIRMATION_INVALID", 409);
     }
+    const decision = await this.store.findApprovedConfirmationDecision({
+      executionId: execution.id,
+      action: validated.action
+    });
+    if (!decision || confirmedAt.getTime() !== decision.decidedAt.getTime()) {
+      throw new ExecutionServiceError("CONFIRMATION_INVALID", 409);
+    }
 
     const token = issueDomainConfirmation(
       validated.action,
@@ -744,6 +755,24 @@ class PrismaExecutionDataStore implements ExecutionDataStore {
     input: ConfirmationClaim
   ): Promise<ConfirmationRecord | null> {
     return this.repository.findConfirmation(input);
+  }
+
+  async findApprovedConfirmationDecision(input: {
+    executionId: string;
+    action: ConfirmationAction;
+  }): Promise<{ decidedAt: Date } | null> {
+    return prisma.confirmationDecision.findFirst({
+      where: {
+        executionId: input.executionId,
+        action: input.action,
+        decision: "approved",
+        execution: {
+          userId: this.scope.userId,
+          workspaceId: this.scope.workspaceId
+        }
+      },
+      select: { decidedAt: true }
+    });
   }
 }
 

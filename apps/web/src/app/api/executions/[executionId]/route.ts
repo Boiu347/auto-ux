@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 
-import {
-  getCurrentUser,
-  type CurrentUser
-} from "../../../../server/auth/current-user";
+import type { CurrentUser } from "../../../../server/auth/current-user";
+import { getRequestUser } from "../../../../server/auth/request-user";
 import {
   createExecutionService,
   ExecutionService,
@@ -15,15 +13,15 @@ type RouteContext = {
 };
 
 type ResolveService = (user: CurrentUser) => ExecutionService;
-type Authenticate = (request: Request) => CurrentUser | null;
+type Authenticate = (request: Request) => CurrentUser | null | Promise<CurrentUser | null>;
 
 export function createExecutionItemHandlers(
   resolveService: ResolveService,
-  authenticate: Authenticate = getCurrentUser
+  authenticate: Authenticate = getRequestUser
 ) {
   return {
     async GET(request: Request, routeContext: RouteContext): Promise<Response> {
-      const user = authenticate(request);
+      const user = await authenticate(request);
       if (!user) {
         return NextResponse.json(
           { code: "UNAUTHENTICATED" },

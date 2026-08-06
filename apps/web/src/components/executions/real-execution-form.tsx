@@ -25,6 +25,7 @@ type FormState =
   | "creating"
   | "launching"
   | "manual_paste"
+  | "queued"
   | "launched"
   | "error";
 
@@ -37,10 +38,14 @@ export function RealExecutionForm({
   bootstrap,
   apiBaseUrl,
   localLaunchEnabled
+  ,cloudPairingEnabled = false
+  ,pairedDeviceReady = false
 }: {
   bootstrap?: { userId: string; workspaceId: string };
   apiBaseUrl?: string;
   localLaunchEnabled: boolean;
+  cloudPairingEnabled?: boolean;
+  pairedDeviceReady?: boolean;
 }) {
   const [state, setState] = useState<FormState>("idle");
   const [created, setCreated] = useState<CreatedTask>();
@@ -80,6 +85,40 @@ export function RealExecutionForm({
       const phoneFilePath = String(data.get("phoneFilePath") ?? "");
       const robotName = String(data.get("robotName") ?? "");
       const baseUrl = apiBaseUrl ?? window.location.origin;
+
+      if (cloudPairingEnabled || pairedDeviceReady) {
+        buildStandaloneCodexPrompt({
+          feishuUrls,
+          requirements,
+          phoneFilePath,
+          robotName
+        });
+        if (!pairedDeviceReady) {
+          throw new Error("请先配对并保持 Mac 助手在线。");
+        }
+        setState("creating");
+        const response = await fetch("/api/paired-tasks", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            requestId: createRequestId(),
+            feishuUrls,
+            requirements,
+            phoneFilePath,
+            robotName
+          })
+        });
+        const value = (await response.json().catch(() => ({}))) as {
+          executionId?: string;
+          message?: string;
+        };
+        if (!response.ok || !value.executionId) {
+          throw new Error(value.message ?? "无法把任务发送到 Mac。");
+        }
+        setCreated({ executionId: value.executionId, prompt: "" });
+        setState("queued");
+        return;
+      }
 
       if (!localLaunchEnabled) {
         const standalonePrompt = buildStandaloneCodexPrompt({
@@ -163,7 +202,11 @@ export function RealExecutionForm({
   };
 
   const busy = state === "creating" || state === "launching";
-  const buttonLabel = !localLaunchEnabled
+  const buttonLabel = cloudPairingEnabled || pairedDeviceReady
+    ? state === "creating"
+      ? "正在发送到 Mac"
+      : "一键发送到 Mac Codex"
+    : !localLaunchEnabled
     ? "复制任务提示词"
     : created
     ? state === "launching"
@@ -196,7 +239,7 @@ export function RealExecutionForm({
             <Input name="robotName" />
           </Field>
         </div>
-        <Button type="submit" appearance="primary" disabled={busy}>
+        <Button type="submit" appearance="primary" disabled={busy || (cloudPairingEnabled && !pairedDeviceReady)}>
           {buttonLabel}
         </Button>
       </form>
@@ -210,6 +253,13 @@ export function RealExecutionForm({
           <MessageBar intent="success">
             <MessageBarBody>
               <strong>任务已交给 Codex</strong>。请在 Codex 中检查提示词并点击发送。
+            </MessageBarBody>
+          </MessageBar>
+        ) : null}
+        {state === "queued" ? (
+          <MessageBar intent="success">
+            <MessageBarBody>
+              <strong>任务已进入 Mac 队列</strong>。助手会自动打开 Codex、粘贴并发送任务。
             </MessageBarBody>
           </MessageBar>
         ) : null}
@@ -228,6 +278,11 @@ export function RealExecutionForm({
       </div>
     </Card>
   );
+}
+
+function createRequestId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return `request_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
 async function hashInput(input: Record<string, unknown>): Promise<string> {

@@ -42,6 +42,14 @@ python3 scripts/execution_state.py init <state.json> <executionId>
 
 恢复任务时必须读取已有状态，不得重新初始化。复核最后检查点、当前页面、机器人身份和高风险确认；旧确认不得跨恢复复用。
 
+如果任务提示词包含 `网站执行上下文`，必须同时初始化网站回报器（把提示词里的值原样作为参数，不得在聊天中复述令牌）：
+
+```bash
+python3 scripts/report_progress.py init <report-state.json> <apiBaseUrl> <executionId> <agentToken>
+```
+
+之后每个阶段只在取得真实证据后用 `event` 上报，并至少每 45 秒运行一次 `heartbeat`。回报失败不等于业务动作失败；停止外部写入、修复回报连接后再继续，禁止补写虚假成功记录。
+
 ### 2. 读取需求资料
 
 读取 [source-ingestion.md](references/source-ingestion.md)。先运行 `lark-cli whoami` 检查现有身份和令牌；仅当令牌失效或权限确实不足时才请用户授权。按资料类型读取全部内容和版本信息，并在本地记录来源 ID、标题、版本/修改时间、定位信息与内容哈希。
@@ -85,6 +93,14 @@ python3 scripts/validate_evidence.py <evidence.json>
 1. `publish`：发布后验证平台明确显示发布成功。
 2. `import_numbers`：先用 `phone_batch.py` 在本地解析、去重和脱敏，再展示统计；完整号码不得出现在输出。
 3. `start_dial`：再次展示主叫、脱敏被叫、电话类型和提交次数，获得独立确认后只提交一次。
+
+网站联动任务到达确认门时，先上报对应 `waiting_confirmation` 检查点，再执行：
+
+```bash
+python3 scripts/report_progress.py wait-confirmation <report-state.json> <publish|import_numbers|start_dial>
+```
+
+等待期间也必须在 Codex 明确询问用户。用户在 Codex 回答后，用 `decide ... approved` 或 `decide ... rejected` 提交；网站按钮和 Codex 中先到达的有效决定生效。返回 `rejected` 时停止该动作。返回 `approved` 后，先对当前确认步骤上报 `running` 并加入 `--confirmed-action <action>` 以消费确认，再执行动作；动作核验完成后才上报下一阶段。确认不得用于其他动作或版本。例如发布门的授权事件必须是 `event ... publish.confirm running publish_confirm --confirmed-action publish`，不能把确认附到 `publish.verify`。
 
 ### 7. 核验外呼结果
 
