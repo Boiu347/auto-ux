@@ -7,8 +7,9 @@ import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 const POLL_INTERVAL_MS = 3_000;
+const PERMISSION_RETRY_MS = 5_000;
 const DEFAULT_CONFIG_PATH = join(homedir(), ".config", "auto-ux", "agent.json");
 const PASTE_AND_SEND_SCRIPT = [
   'tell application "Codex" to activate',
@@ -43,7 +44,25 @@ export async function deliverTask(task, dependencies) {
   await setStatus("codex_opened");
   try {
     await dependencies.pasteAndSend();
-  } catch {
+  } catch (error) {
+    if (isAccessibilityError(error)) {
+      await setStatus("waiting_permission", "MAC_ACCESSIBILITY_REQUIRED");
+      await dependencies.requestAccessibility();
+      for (;;) {
+        await dependencies.sleep(PERMISSION_RETRY_MS);
+        try {
+          await dependencies.pasteAndSend();
+          await setStatus("prompt_sent");
+          return "prompt_sent";
+        } catch (retryError) {
+          if (!isAccessibilityError(retryError)) {
+            await setStatus("failed", "CODEX_SEND_FAILED");
+            return "failed";
+          }
+          await setStatus("waiting_permission", "MAC_ACCESSIBILITY_REQUIRED");
+        }
+      }
+    }
     await setStatus("failed", "CODEX_SEND_FAILED");
     return "failed";
   }
@@ -94,6 +113,8 @@ export async function pollOnce(config, overrides = {}) {
     copyPrompt: overrides.copyPrompt ?? copyPrompt,
     openCodex: overrides.openCodex ?? openCodex,
     pasteAndSend: overrides.pasteAndSend ?? pasteAndSend,
+    requestAccessibility: overrides.requestAccessibility ?? requestAccessibility,
+    sleep: overrides.sleep ?? sleep,
     setStatus
   });
 }
@@ -155,15 +176,43 @@ async function pasteAndSend() {
   await runCommand("/usr/bin/osascript", ["-e", PASTE_AND_SEND_SCRIPT]);
 }
 
+async function requestAccessibility() {
+  await Promise.allSettled([
+    runCommand("/usr/bin/open", [
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+    ]),
+    runCommand("/usr/bin/osascript", [
+      "-e",
+      'display notification "请在辅助功能中允许 Node.js 或 osascript；授权后任务会自动继续。" with title "Auto UX 等待授权"'
+    ])
+  ]);
+}
+
+function isAccessibilityError(error) {
+  return /not allowed to send keystrokes|assistive access|not authorized|accessibility|-1743/i.test(
+    error instanceof Error ? error.message : String(error)
+  );
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 function runCommand(command, args, stdin) {
   return new Promise((resolve, reject) => {
+    let stderr = "";
     const child = spawn(command, args, {
       shell: false,
-      stdio: [stdin === undefined ? "ignore" : "pipe", "ignore", "ignore"]
+      stdio: [stdin === undefined ? "ignore" : "pipe", "ignore", "pipe"]
+    });
+    child.stderr?.on("data", (chunk) => {
+      if (stderr.length < 4_096) stderr += chunk.toString("utf8");
     });
     child.once("error", reject);
     child.once("close", (code) =>
-      code === 0 ? resolve() : reject(new Error(`${command} exited ${code ?? "unknown"}`))
+      code === 0
+        ? resolve()
+        : reject(new Error(`${command} exited ${code ?? "unknown"}: ${stderr.trim()}`))
     );
     if (stdin !== undefined) child.stdin?.end(stdin, "utf8");
   });

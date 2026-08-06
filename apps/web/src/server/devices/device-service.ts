@@ -19,6 +19,7 @@ export type DeviceTaskStatus =
   | "queued"
   | "claimed"
   | "codex_opened"
+  | "waiting_permission"
   | "prompt_sent"
   | "failed";
 
@@ -71,7 +72,7 @@ export interface DeviceStore {
     pairingId: string;
     taskId: string;
     claimTokenHash: string;
-    status: "codex_opened" | "prompt_sent" | "failed";
+    status: "codex_opened" | "waiting_permission" | "prompt_sent" | "failed";
     errorCode?: string;
     now: Date;
   }): Promise<DeviceTaskRecord | null>;
@@ -290,7 +291,7 @@ export class DeviceService {
     taskId: string,
     input: {
       claimToken: string;
-      status: "codex_opened" | "prompt_sent" | "failed";
+      status: "codex_opened" | "waiting_permission" | "prompt_sent" | "failed";
       errorCode?: string;
     }
   ): Promise<DeviceTaskRecord> {
@@ -299,7 +300,7 @@ export class DeviceService {
       throw new Error("TASK_CLAIM_MISMATCH");
     }
     if (
-      input.status === "failed" &&
+      (input.status === "failed" || input.status === "waiting_permission") &&
       (!input.errorCode || !/^[A-Z][A-Z0-9_]{2,63}$/.test(input.errorCode))
     ) {
       throw new Error("INVALID_TASK_RESULT");

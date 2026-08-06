@@ -134,4 +134,29 @@ describe("Mac device API", () => {
       }
     );
   });
+
+  it("records that the helper is waiting for Accessibility approval", async () => {
+    const updateTask = vi.fn().mockResolvedValue({
+      id: "Task_1",
+      status: "waiting_permission",
+      errorCode: "MAC_ACCESSIBILITY_REQUIRED"
+    });
+    const handler = createDeviceTaskStatusHandler({ updateTask });
+    const response = await handler(
+      new Request("https://auto-ux.example/api/devices/tasks/Task_1", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer device_token:${"d".repeat(64)}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          claimToken: `task_claim:${"e".repeat(64)}`,
+          status: "waiting_permission",
+          errorCode: "MAC_ACCESSIBILITY_REQUIRED"
+        })
+      }),
+      { params: Promise.resolve({ taskId: "Task_1" }) }
+    );
+    expect(response.status).toBe(200);
+  });
 });

@@ -46,6 +46,39 @@ test("deliverTask reports a missing local number file without opening Codex", as
   assert.deepEqual(calls, [["status", "failed", "PHONE_FILE_NOT_FOUND"]]);
 });
 
+test("deliverTask opens Accessibility settings and retries after permission is granted", async () => {
+  const calls = [];
+  let attempts = 0;
+  const result = await deliverTask(task, {
+    fileExists: async () => true,
+    copyPrompt: async () => calls.push(["copy"]),
+    openCodex: async () => calls.push(["open"]),
+    pasteAndSend: async () => {
+      calls.push(["send"]);
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error("osascript is not allowed to send keystrokes. (-1743)");
+      }
+    },
+    requestAccessibility: async () => calls.push(["permission"]),
+    sleep: async () => calls.push(["wait"]),
+    setStatus: async (status, errorCode) => calls.push(["status", status, errorCode])
+  });
+
+  assert.equal(result, "prompt_sent");
+  assert.deepEqual(calls, [
+    ["copy"],
+    ["open"],
+    ["status", "codex_opened", undefined],
+    ["send"],
+    ["status", "waiting_permission", "MAC_ACCESSIBILITY_REQUIRED"],
+    ["permission"],
+    ["wait"],
+    ["send"],
+    ["status", "prompt_sent", undefined]
+  ]);
+});
+
 test("pollOnce treats an empty queue as healthy idle state", async () => {
   const request = async () => new Response(null, { status: 204 });
   assert.equal(

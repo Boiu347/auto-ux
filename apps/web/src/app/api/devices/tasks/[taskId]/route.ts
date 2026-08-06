@@ -12,6 +12,11 @@ const ResultSchema = z.discriminatedUnion("status", [
   }).strict(),
   z.object({
     claimToken: z.string().regex(/^task_claim:[a-f0-9]{64}$/),
+    status: z.literal("waiting_permission"),
+    errorCode: z.literal("MAC_ACCESSIBILITY_REQUIRED")
+  }).strict(),
+  z.object({
+    claimToken: z.string().regex(/^task_claim:[a-f0-9]{64}$/),
     status: z.literal("prompt_sent")
   }).strict(),
   z.object({

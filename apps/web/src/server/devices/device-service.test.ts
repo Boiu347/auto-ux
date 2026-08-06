@@ -71,7 +71,7 @@ class MemoryDeviceStore implements DeviceStore {
       (candidate) =>
         candidate.pairingId === input.pairingId &&
         (candidate.status === "queued" ||
-          (candidate.status === "claimed" &&
+          (["claimed", "codex_opened", "waiting_permission"].includes(candidate.status) &&
             candidate.leaseExpiresAt !== null &&
             candidate.leaseExpiresAt <= input.now))
     );
@@ -88,7 +88,7 @@ class MemoryDeviceStore implements DeviceStore {
     pairingId: string;
     taskId: string;
     claimTokenHash: string;
-    status: "codex_opened" | "prompt_sent" | "failed";
+    status: "codex_opened" | "waiting_permission" | "prompt_sent" | "failed";
     errorCode?: string;
     now: Date;
   }) {
@@ -98,7 +98,7 @@ class MemoryDeviceStore implements DeviceStore {
         candidate.pairingId === input.pairingId &&
         candidate.claimTokenHash === input.claimTokenHash
     );
-    if (!task || !["claimed", "codex_opened"].includes(task.status)) return null;
+    if (!task || !["claimed", "codex_opened", "waiting_permission"].includes(task.status)) return null;
     task.status = input.status;
     task.errorCode = input.errorCode ?? null;
     task.updatedAt = input.now;

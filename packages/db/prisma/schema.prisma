@@ -73,6 +73,7 @@ enum DeviceTaskStatus {
   queued
   claimed
   codex_opened
+  waiting_permission
   prompt_sent
   failed
 }

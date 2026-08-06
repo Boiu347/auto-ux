@@ -150,7 +150,7 @@ export class PrismaDeviceStore implements DeviceStore {
         WHERE "pairingId" = ${input.pairingId}
           AND (
             "status" = 'queued'
-            OR ("status" IN ('claimed', 'codex_opened') AND "leaseExpiresAt" <= ${input.now})
+            OR ("status" IN ('claimed', 'codex_opened', 'waiting_permission') AND "leaseExpiresAt" <= ${input.now})
           )
         ORDER BY "createdAt" ASC
         LIMIT 1
@@ -175,7 +175,7 @@ export class PrismaDeviceStore implements DeviceStore {
     pairingId: string;
     taskId: string;
     claimTokenHash: string;
-    status: "codex_opened" | "prompt_sent" | "failed";
+    status: "codex_opened" | "waiting_permission" | "prompt_sent" | "failed";
     errorCode?: string;
     now: Date;
   }): Promise<DeviceTaskRecord | null> {
@@ -184,7 +184,7 @@ export class PrismaDeviceStore implements DeviceStore {
         id: input.taskId,
         pairingId: input.pairingId,
         claimTokenHash: input.claimTokenHash,
-        status: { in: ["claimed", "codex_opened"] },
+        status: { in: ["claimed", "codex_opened", "waiting_permission"] },
         leaseExpiresAt: { gt: input.now }
       },
       data: {
@@ -193,7 +193,7 @@ export class PrismaDeviceStore implements DeviceStore {
         leaseExpiresAt:
           input.status === "prompt_sent" || input.status === "failed"
             ? null
-            : undefined,
+            : new Date(input.now.getTime() + 30_000),
         updatedAt: input.now
       }
     });
