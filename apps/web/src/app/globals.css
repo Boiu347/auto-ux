@@ -90,6 +90,47 @@ a {
   align-content: start;
 }
 
+.real-execution-card {
+  width: min(100%, 900px);
+  margin-bottom: 32px;
+  padding: 8px;
+}
+
+.real-execution-form {
+  display: grid;
+  gap: 18px;
+}
+
+.real-execution-form textarea {
+  min-height: 92px;
+}
+
+.real-form-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(220px, 0.7fr);
+  gap: 16px;
+}
+
+.real-execution-form > button {
+  width: fit-content;
+  min-width: 210px;
+  white-space: nowrap;
+}
+
+.real-execution-feedback {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.real-confirmation-notice {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 20px;
+  background: var(--colorNeutralBackground1);
+}
+
 .confirmation-panel button {
   width: fit-content;
   min-width: 132px;
@@ -340,6 +381,14 @@ button:focus-visible {
 
   .development-session-form {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .real-form-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .real-execution-form > button {
+    width: 100%;
   }
 
   .fact + .fact {

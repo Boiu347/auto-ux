@@ -24,6 +24,7 @@ const execution: ExecutionSummary = {
   status: "running",
   phase: "environment_preflight",
   targetPolicy: "create_only",
+  mode: "simulator",
   updatedAt: "2026-07-30T08:00:00.000Z",
   agentId: "agent-owner",
   agentHeartbeatAt: "2026-07-30T08:00:00.000Z"
@@ -179,6 +180,34 @@ describe("HybridProgress", () => {
       }
     }
   );
+
+  it("sends real execution confirmations back to Codex without a website button", () => {
+    render(
+      <HybridProgress
+        execution={{
+          ...execution,
+          mode: "real_codex",
+          status: "waiting_confirmation",
+          phase: "publish_confirm"
+        }}
+        initialEvents={[
+          persisted(
+            "cursor:opaque:real-publish",
+            checkpoint(
+              "publish.confirm",
+              "waiting_confirmation",
+              "publish_confirm"
+            )
+          )
+        ]}
+      />
+    );
+
+    expect(screen.getByText("请回到 Codex 确认发布")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "确认发布" })
+    ).not.toBeInTheDocument();
+  });
 
   it("does not expose a confirmation from a cross-action event", () => {
     render(

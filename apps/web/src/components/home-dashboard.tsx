@@ -7,19 +7,18 @@ import {
   webLightTheme
 } from "@fluentui/react-components";
 
-import { DevelopmentSessionForm } from "./auth/development-session-form";
-import { DemoExecution } from "./executions/demo-execution";
 import { ExecutionList } from "./executions/execution-list";
+import { RealExecutionForm } from "./executions/real-execution-form";
 
 export function HomeDashboard({
-  developmentSessionEnabled,
-  demoBootstrap
+  bootstrap,
+  localLaunchEnabled
 }: {
-  developmentSessionEnabled: boolean;
-  demoBootstrap?: {
+  bootstrap?: {
     userId: string;
     workspaceId: string;
   };
+  localLaunchEnabled: boolean;
 }) {
   return (
     <FluentProvider theme={webLightTheme} className="dashboard-provider">
@@ -29,8 +28,14 @@ export function HomeDashboard({
           <Title1 as="h1">百度云外呼一键配置</Title1>
           <Text>安全地准备、确认并跟踪每次外呼机器人配置。</Text>
         </header>
-        {developmentSessionEnabled ? <DevelopmentSessionForm /> : null}
-        {demoBootstrap ? <DemoExecution bootstrap={demoBootstrap} /> : null}
+        {bootstrap ? (
+          <RealExecutionForm
+            bootstrap={bootstrap}
+            localLaunchEnabled={localLaunchEnabled}
+          />
+        ) : (
+          <Text>当前环境未启用 Mac 本地执行入口。</Text>
+        )}
         <ExecutionList executions={[]} />
       </main>
     </FluentProvider>

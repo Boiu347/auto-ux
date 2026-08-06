@@ -8,18 +8,16 @@ describe("home page", () => {
     vi.unstubAllEnvs();
   });
 
-  it("shows an empty execution list and an unavailable Codex launch action", () => {
+  it("shows the real Mac task form and execution list", () => {
+    vi.stubEnv("AUTO_UX_LOCAL_CODEX_LAUNCH", "1");
     const markup = renderToStaticMarkup(createElement(HomePage));
 
     expect(markup).toContain("百度云外呼一键配置");
     expect(markup).toContain("暂无执行任务");
-    expect(markup).toContain("在 Codex 中开始执行");
-    expect(markup).toContain("disabled=\"\"");
-    expect(markup).toContain("创建并确认配置草案后，才能在 Codex 中开始执行。");
-    expect(markup).toContain("开发会话");
-    expect(markup).toContain("用户 ID");
-    expect(markup).toContain("工作区 ID");
-    expect(markup).toContain("建立开发会话");
+    expect(markup).toContain("发起真实配置");
+    expect(markup).toContain("飞书文档链接");
+    expect(markup).toContain("本地号码文件路径");
+    expect(markup).toContain("一键配置并打开 Codex");
   });
 
   it("never passes a local authentication secret into the client bootstrap", () => {
@@ -43,7 +41,7 @@ describe("home page", () => {
 
     const markup = renderToStaticMarkup(createElement(HomePage));
 
-    expect(markup).not.toContain("开发会话");
+    expect(markup).not.toContain("发起真实配置");
     expect(markup).not.toContain("创建演示任务");
   });
 });

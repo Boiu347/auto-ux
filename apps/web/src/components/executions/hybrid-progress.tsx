@@ -32,6 +32,7 @@ export interface ExecutionSummary {
   status: ExecutionStatus;
   phase: ExecutionPhase;
   targetPolicy: "create_only";
+  mode: "simulator" | "real_codex";
   updatedAt: string;
   agentId: string | null;
   agentHeartbeatAt: string | null;
@@ -82,7 +83,9 @@ export function HybridProgress({
     new Set(normalizeEvents(initialEvents).map(persistedEventKey))
   );
   const bridge =
-    localAgentBridge === undefined
+    execution?.mode === "real_codex"
+      ? null
+      : localAgentBridge === undefined
       ? resolveLocalAgentBridge()
       : localAgentBridge;
 
@@ -318,17 +321,45 @@ export function HybridProgress({
               event={currentEvent}
               lastCheckpoint={lastCheckpoint}
             />
-            <ConfirmationPanel
-              key={`${execution.id}:${execution.configVersion}:${execution.phase}:${execution.status}`}
-              execution={execution}
-              event={currentEvent}
-              bridge={bridge}
-              refreshSummary={refreshSummary}
-            />
+            {execution.mode === "real_codex" ? (
+              <RealConfirmationNotice execution={execution} event={currentEvent} />
+            ) : (
+              <ConfirmationPanel
+                key={`${execution.id}:${execution.configVersion}:${execution.phase}:${execution.status}`}
+                execution={execution}
+                event={currentEvent}
+                bridge={bridge}
+                refreshSummary={refreshSummary}
+              />
+            )}
           </section>
         </div>
       </main>
     </FluentProvider>
+  );
+}
+
+function RealConfirmationNotice({
+  execution,
+  event
+}: {
+  execution: ExecutionSummary;
+  event?: ExecutionEvent;
+}) {
+  const label: Partial<Record<ExecutionPhase, string>> = {
+    publish_confirm: "请回到 Codex 确认发布",
+    numbers_confirm: "请回到 Codex 确认导入号码",
+    dial_confirm: "请回到 Codex 确认开始外呼"
+  };
+  const waiting =
+    execution.status === "waiting_confirmation" &&
+    event?.status === "waiting_confirmation";
+  return (
+    <section className="dashboard-panel real-confirmation-notice" aria-live="polite">
+      <Text as="h2" weight="semibold" size={500}>下一确认门</Text>
+      <Text>{waiting ? (label[execution.phase] ?? "请回到 Codex 继续确认") : "当前无需确认"}</Text>
+      <Text size={200}>高风险操作只在本次 Codex 任务中确认，网站不会代替你授权。</Text>
+    </section>
   );
 }
 
