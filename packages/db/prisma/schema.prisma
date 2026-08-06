@@ -36,6 +36,11 @@ enum TargetPolicy {
   create_only
 }
 
+enum ExecutionMode {
+  simulator
+  real_codex
+}
+
 enum OperationStatus {
   running
   succeeded
@@ -123,6 +128,9 @@ model Execution {
   status                 ExecutionStatus
   phase                  ExecutionPhase
   targetPolicy           TargetPolicy
+  mode                   ExecutionMode        @default(simulator)
+  agentAccessTokenHash   String?              @unique
+  agentAccessExpiresAt   DateTime?
   executionLockAgentId   String?
   executionLockSessionId String?
   executionLockExpiresAt DateTime?
@@ -144,6 +152,7 @@ model Execution {
   @@unique([id, workspaceId])
   @@index([userId, workspaceId, createdAt])
   @@index([executionLockExpiresAt])
+  @@index([agentAccessExpiresAt])
 }
 
 model ExecutionStep {

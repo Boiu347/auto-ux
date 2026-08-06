@@ -3,6 +3,7 @@ export { PrismaExecutionRepository } from "./execution-repository";
 export { InvalidExecutionCursorError } from "./execution-repository";
 export type {
   AppendStepEventResult,
+  AgentTokenScope,
   ClaimExecutionAgentResult,
   ConfirmationClaim,
   ConfirmationRecord,

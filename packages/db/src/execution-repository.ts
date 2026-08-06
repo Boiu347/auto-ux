@@ -2,11 +2,13 @@ import {
   AgentCapabilityManifestSchema,
   ConfirmationActionSchema,
   ExecutionEventSchema,
+  ExecutionModeSchema,
   ExecutionPhaseSchema,
   ExecutionStatusSchema,
   type ConfirmationAction,
   type AgentCapabilityManifest,
   type ExecutionEvent,
+  type ExecutionMode,
   type ExecutionPhase,
   type ExecutionStatus
 } from "@app/contracts";
@@ -20,6 +22,7 @@ export interface ExecutionRecord {
   status: ExecutionStatus;
   phase: ExecutionPhase;
   targetPolicy: "create_only";
+  mode: ExecutionMode;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -96,7 +99,14 @@ export interface ExecutionRepository {
     userId: string;
     workspaceId: string;
     configVersion: number;
+    mode?: ExecutionMode;
+    agentAccessTokenHash?: string;
+    agentAccessExpiresAt?: Date;
   }): Promise<ExecutionRecord>;
+  findScopeByAgentTokenHash(
+    tokenHash: string,
+    executionId: string
+  ): Promise<AgentTokenScope | null>;
   findByIdForUser(
     executionId: string,
     userId: string,
@@ -156,6 +166,11 @@ export interface ExecutionRepository {
   findConfirmation(input: ConfirmationClaim): Promise<ConfirmationRecord | null>;
 }
 
+export interface AgentTokenScope extends RepositoryScope {
+  mode: ExecutionMode;
+  tokenExpiresAt: Date;
+}
+
 export class PrismaExecutionRepository implements ExecutionRepository {
   constructor(
     private readonly client: PrismaClient,
@@ -166,8 +181,29 @@ export class PrismaExecutionRepository implements ExecutionRepository {
     userId: string;
     workspaceId: string;
     configVersion: number;
+    mode?: ExecutionMode;
+    agentAccessTokenHash?: string;
+    agentAccessExpiresAt?: Date;
   }): Promise<ExecutionRecord> {
     this.assertScope(input);
+    const mode = ExecutionModeSchema.parse(input.mode ?? "simulator");
+    const hasTokenHash = input.agentAccessTokenHash !== undefined;
+    const hasTokenExpiry = input.agentAccessExpiresAt !== undefined;
+    if (hasTokenHash !== hasTokenExpiry) {
+      throw new Error("agent access token hash and expiry must be provided together");
+    }
+    if (mode === "real_codex" && !hasTokenHash) {
+      throw new Error("real Codex executions require an agent access token");
+    }
+    if (mode === "simulator" && hasTokenHash) {
+      throw new Error("simulator executions cannot carry an agent access token");
+    }
+    if (
+      input.agentAccessTokenHash !== undefined &&
+      !/^[a-f0-9]{64}$/.test(input.agentAccessTokenHash)
+    ) {
+      throw new Error("agent access token hash must be SHA-256 hex");
+    }
 
     const execution = await this.client.$transaction(async (transaction) => {
       await transaction.user.upsert({
@@ -194,12 +230,48 @@ export class PrismaExecutionRepository implements ExecutionRepository {
           configVersion: input.configVersion,
           status: "pending",
           phase: "source_parse",
-          targetPolicy: "create_only"
+          targetPolicy: "create_only",
+          mode,
+          agentAccessTokenHash: input.agentAccessTokenHash,
+          agentAccessExpiresAt: input.agentAccessExpiresAt
         }
       });
     });
 
     return this.toExecutionRecord(execution);
+  }
+
+  async findScopeByAgentTokenHash(
+    tokenHash: string,
+    executionId: string
+  ): Promise<AgentTokenScope | null> {
+    if (!/^[a-f0-9]{64}$/.test(tokenHash)) {
+      return null;
+    }
+    const execution = await this.client.execution.findFirst({
+      where: {
+        id: executionId,
+        userId: this.scope.userId,
+        workspaceId: this.scope.workspaceId,
+        agentAccessTokenHash: tokenHash,
+        agentAccessExpiresAt: { gt: new Date() }
+      },
+      select: {
+        userId: true,
+        workspaceId: true,
+        mode: true,
+        agentAccessExpiresAt: true
+      }
+    });
+    if (!execution?.agentAccessExpiresAt) {
+      return null;
+    }
+    return {
+      userId: execution.userId,
+      workspaceId: execution.workspaceId,
+      mode: ExecutionModeSchema.parse(execution.mode),
+      tokenExpiresAt: execution.agentAccessExpiresAt
+    };
   }
 
   async findByIdForUser(
@@ -752,6 +824,7 @@ export class PrismaExecutionRepository implements ExecutionRepository {
     status: string;
     phase: string;
     targetPolicy: string;
+    mode: string;
     createdAt: Date;
     updatedAt: Date;
   }): ExecutionRecord {
@@ -759,7 +832,8 @@ export class PrismaExecutionRepository implements ExecutionRepository {
       ...execution,
       status: ExecutionStatusSchema.parse(execution.status),
       phase: ExecutionPhaseSchema.parse(execution.phase),
-      targetPolicy: this.toCreateOnlyPolicy(execution.targetPolicy)
+      targetPolicy: this.toCreateOnlyPolicy(execution.targetPolicy),
+      mode: ExecutionModeSchema.parse(execution.mode)
     };
   }
 

@@ -80,6 +80,58 @@ describe("PrismaExecutionRepository", () => {
     await prisma.$disconnect();
   });
 
+  it("persists real Codex mode and resolves only the matching active credential", async () => {
+    const tokenHash = "b".repeat(64);
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1,
+      mode: "real_codex",
+      agentAccessTokenHash: tokenHash,
+      agentAccessExpiresAt: new Date("2099-08-06T05:00:00.000Z")
+    });
+
+    expect(execution.mode).toBe("real_codex");
+    await expect(
+      repository.findScopeByAgentTokenHash(tokenHash, execution.id)
+    ).resolves.toEqual({
+      userId: "U-1",
+      workspaceId: "W-1",
+      mode: "real_codex",
+      tokenExpiresAt: new Date("2099-08-06T05:00:00.000Z")
+    });
+    await expect(
+      repository.findScopeByAgentTokenHash("c".repeat(64), execution.id)
+    ).resolves.toBeNull();
+    await expect(
+      repository.findScopeByAgentTokenHash(tokenHash, "execution_missing")
+    ).resolves.toBeNull();
+
+    const otherRepository = new PrismaExecutionRepository(prisma, {
+      userId: "U-2",
+      workspaceId: "W-2"
+    });
+    await expect(
+      otherRepository.findScopeByAgentTokenHash(tokenHash, execution.id)
+    ).resolves.toBeNull();
+  });
+
+  it("does not resolve an expired real Codex credential", async () => {
+    const tokenHash = "d".repeat(64);
+    const execution = await repository.create({
+      userId: "U-1",
+      workspaceId: "W-1",
+      configVersion: 1,
+      mode: "real_codex",
+      agentAccessTokenHash: tokenHash,
+      agentAccessExpiresAt: new Date("2000-08-06T05:00:00.000Z")
+    });
+
+    await expect(
+      repository.findScopeByAgentTokenHash(tokenHash, execution.id)
+    ).resolves.toBeNull();
+  });
+
   it("does not return an execution to a different user", async () => {
     const execution = await repository.create({
       userId: "U-1",
