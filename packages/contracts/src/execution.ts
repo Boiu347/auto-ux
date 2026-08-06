@@ -68,7 +68,18 @@ export const ExecutionPhaseSchema = z.enum([
   "complete"
 ]);
 
+export const ExecutionModeSchema = z.enum(["simulator", "real_codex"]);
+
 export const ConfirmationActionSchema = z.enum(confirmationActions);
+
+export const LocalConfirmationProofSchema = z
+  .object({
+    source: z.literal("local_codex"),
+    action: ConfirmationActionSchema,
+    confirmedAt: z.string().datetime(),
+    stateHash: z.string().regex(/^sha256:[a-f0-9]{64}$/)
+  })
+  .strict();
 
 const LowRiskActionSchema = z.enum(["configure"]);
 const ExecutionStepSchema = z.enum(executionSteps);
@@ -260,8 +271,12 @@ export type AgentCapabilityManifest = z.infer<
   typeof AgentCapabilityManifestSchema
 >;
 export type ExecutionPhase = z.infer<typeof ExecutionPhaseSchema>;
+export type ExecutionMode = z.infer<typeof ExecutionModeSchema>;
 export type ExecutionPacket = z.infer<typeof ExecutionPacketSchema>;
 export type ExecutionEvent = z.infer<typeof ExecutionEventSchema>;
 export type ConfirmationAction = z.infer<typeof ConfirmationActionSchema>;
 export type ActionConfirmation = z.infer<typeof ActionConfirmationSchema>;
 export type ExecutionEvidence = z.infer<typeof ExecutionEvidenceSchema>;
+export type LocalConfirmationProof = z.infer<
+  typeof LocalConfirmationProofSchema
+>;

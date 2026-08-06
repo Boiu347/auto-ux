@@ -4,9 +4,11 @@ export {
   ConfirmationActionSchema,
   ExecutionEvidenceSchema,
   ExecutionEventSchema,
+  ExecutionModeSchema,
   ExecutionPacketSchema,
   ExecutionPhaseSchema,
-  ExecutionStatusSchema
+  ExecutionStatusSchema,
+  LocalConfirmationProofSchema
 } from "./execution.js";
 
 export type {
@@ -15,7 +17,9 @@ export type {
   ConfirmationAction,
   ExecutionEvidence,
   ExecutionEvent,
+  ExecutionMode,
   ExecutionPacket,
   ExecutionPhase,
-  ExecutionStatus
+  ExecutionStatus,
+  LocalConfirmationProof
 } from "./execution.js";

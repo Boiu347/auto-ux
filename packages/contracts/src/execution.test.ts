@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   AgentCapabilityManifestSchema,
   ExecutionEventSchema,
-  ExecutionPacketSchema
+  ExecutionModeSchema,
+  ExecutionPacketSchema,
+  LocalConfirmationProofSchema
 } from "./execution";
 
 describe("execution contracts", () => {
@@ -32,6 +34,45 @@ describe("execution contracts", () => {
     errorCode: "CALL_RECORD_UNAVAILABLE",
     nextAction: "wait_for_user"
   };
+
+  it("accepts only simulator and real Codex execution modes", () => {
+    expect(ExecutionModeSchema.parse("simulator")).toBe("simulator");
+    expect(ExecutionModeSchema.parse("real_codex")).toBe("real_codex");
+    expect(ExecutionModeSchema.safeParse("cloud_agent").success).toBe(false);
+  });
+
+  it("accepts a strict local Codex confirmation proof", () => {
+    const proof = {
+      source: "local_codex",
+      action: "publish",
+      confirmedAt: "2026-08-06T04:00:00.000Z",
+      stateHash: `sha256:${"a".repeat(64)}`
+    };
+
+    expect(LocalConfirmationProofSchema.parse(proof)).toEqual(proof);
+  });
+
+  it("rejects malformed or expanded local confirmation proofs", () => {
+    const proof = {
+      source: "local_codex",
+      action: "publish",
+      confirmedAt: "2026-08-06T04:00:00.000Z",
+      stateHash: `sha256:${"a".repeat(64)}`
+    };
+
+    expect(
+      LocalConfirmationProofSchema.safeParse({ ...proof, action: "configure" })
+        .success
+    ).toBe(false);
+    expect(
+      LocalConfirmationProofSchema.safeParse({ ...proof, stateHash: "sha256:abc" })
+        .success
+    ).toBe(false);
+    expect(
+      LocalConfirmationProofSchema.safeParse({ ...proof, token: "secret" })
+        .success
+    ).toBe(false);
+  });
 
   it("rejects an execution packet that can modify existing robots", () => {
     const result = ExecutionPacketSchema.safeParse({
