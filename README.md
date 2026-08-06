@@ -80,7 +80,7 @@ Build: pnpm build
 Start: pnpm start
 ```
 
-云端页面会显示真实任务表单并复制独立 Codex 提示词，但不会声称能够从 Railway 打开本地 Codex。需要实时进度、执行令牌和自动打开 Codex 时，请在 Mac 本地运行网站并配置 PostgreSQL。
+云端页面会显示真实任务表单并复制独立 Codex 提示词，但不会声称能够从 Railway 打开本地 Codex。本地模式已经具备执行令牌、任务页面和进度接口，也可以自动打开 Codex；当前 Skill 尚未接入自动进度上报，因此任务页面不会自动展示 Codex 的执行步骤。
 
 `.env.example` 只提供本地示例。不要把真实会话、原始文档或完整电话号码写入环境文件。
 

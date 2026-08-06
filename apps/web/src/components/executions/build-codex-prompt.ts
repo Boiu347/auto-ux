@@ -38,7 +38,7 @@ export function buildCodexPrompt(input: RealExecutionPromptInput): string {
     "执行要求：",
     "1. 先读取 Skill 和飞书文档，使用现有登录态；仅在令牌失效或确实缺少权限时请求授权。",
     "2. 只创建新机器人，不覆盖现有机器人。发布、导入号码、开始外呼必须分别在 Codex 中向我确认。",
-    "3. 使用 report_progress.py 向网站 claim、heartbeat 并上报每个阶段的真实事件。",
+    "3. 当前 Skill 尚未接入网站进度上报；不得伪造或推测进度事件。",
     "4. 不得输出完整号码、Cookie、飞书令牌或百度登录凭据。号码只能显示掩码。",
     "5. 遇到页面字段无法确认时停止并说明，不能把推测写成成功。"
   ].join("\n");

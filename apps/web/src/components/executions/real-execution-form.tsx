@@ -223,7 +223,7 @@ export function RealExecutionForm({
           </MessageBar>
         ) : null}
         {created ? (
-          <Link href={`/executions/${created.executionId}`}>查看实时进度</Link>
+          <Link href={`/executions/${created.executionId}`}>查看任务页面</Link>
         ) : null}
       </div>
     </Card>

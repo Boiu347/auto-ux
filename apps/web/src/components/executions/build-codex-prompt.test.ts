@@ -25,7 +25,8 @@ describe("buildCodexPrompt", () => {
     expect(prompt).toContain(input.phoneFilePath);
     expect(prompt).toContain("create_only");
     expect(prompt).toContain("发布、导入号码、开始外呼");
-    expect(prompt).toContain("report_progress.py");
+    expect(prompt).toContain("尚未接入网站进度上报");
+    expect(prompt).not.toContain("report_progress.py");
     expect(prompt).toContain("不得输出完整号码");
     expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(32 * 1024);
   });

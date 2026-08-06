@@ -46,7 +46,7 @@ describe("RealExecutionForm", () => {
       "/api/executions",
       "/api/local/launch"
     ]);
-    expect(screen.getByRole("link", { name: "查看实时进度" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "查看任务页面" })).toHaveAttribute(
       "href",
       "/executions/EX-REAL"
     );
