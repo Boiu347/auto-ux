@@ -20,6 +20,18 @@ describe("home page", () => {
     expect(markup).toContain("一键配置并打开 Codex");
   });
 
+  it("presents task creation as the primary workspace with supporting guidance", () => {
+    vi.stubEnv("AUTO_UX_LOCAL_CODEX_LAUNCH", "1");
+    const markup = renderToStaticMarkup(createElement(HomePage));
+
+    expect(markup).toContain('aria-label="发起配置工作区"');
+    expect(markup).toContain('aria-label="主要任务"');
+    expect(markup).toContain('aria-label="配置辅助信息"');
+    expect(markup).toContain("01 整理资料");
+    expect(markup).toContain("02 确认配置");
+    expect(markup).toContain("03 本机执行");
+  });
+
   it("never passes a local authentication secret into the client bootstrap", () => {
     const localTestKey = "must-never-enter-the-client-bootstrap";
     vi.stubEnv("NODE_ENV", "test");

@@ -24,13 +24,13 @@ export function ExecutionList({
       </Title2>
 
       {executions.length === 0 ? (
-        <Card className="dashboard-panel empty-list-panel">
-          <CardHeader header={<Text weight="semibold">暂无执行任务</Text>} />
+        <div className="empty-list-panel">
+          <Text weight="semibold">暂无执行任务</Text>
           <Text>创建并确认配置草案后，才能在 Codex 中开始执行。</Text>
           <Button type="button" disabled>
             在 Codex 中开始执行
           </Button>
-        </Card>
+        </div>
       ) : (
         <div className="execution-list">
           {executions.map((execution) => (
