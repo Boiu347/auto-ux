@@ -14,6 +14,7 @@
     "test:scripts": "./tests/integration/process-ownership.test.sh",
     "typecheck": "pnpm --filter @app/contracts typecheck && pnpm --filter @app/execution-core typecheck && pnpm --filter @app/db typecheck && pnpm --filter @app/agent-simulator typecheck && pnpm --filter @app/web typecheck",
     "lint": "pnpm -r --if-present lint",
+    "start": "pnpm --filter @app/web start",
     "verify:clean-build": "./scripts/verify-clean-build.sh"
   },
   "devDependencies": {

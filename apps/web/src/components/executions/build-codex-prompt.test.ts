@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { buildCodexPrompt } from "./build-codex-prompt";
+import {
+  buildCodexPrompt,
+  buildStandaloneCodexPrompt
+} from "./build-codex-prompt";
 
 const input = {
   executionId: "EX-1",
@@ -35,5 +38,14 @@ describe("buildCodexPrompt", () => {
     [{ ...input, requirements: "x".repeat(40_000) }]
   ])("rejects unsafe or oversized input", (candidate) => {
     expect(() => buildCodexPrompt(candidate)).toThrow();
+  });
+
+  it("builds a Railway-safe standalone prompt without a fake execution token", () => {
+    const prompt = buildStandaloneCodexPrompt(input);
+    expect(prompt).toContain("$baidu-cloud-one-click-config");
+    expect(prompt).toContain(input.feishuUrls[0]);
+    expect(prompt).not.toContain("execution_token:");
+    expect(prompt).not.toContain("report_progress.py");
+    expect(prompt).toContain("独立模式");
   });
 });

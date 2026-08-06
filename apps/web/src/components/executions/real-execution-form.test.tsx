@@ -108,4 +108,31 @@ describe("RealExecutionForm", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("copies a standalone Skill prompt when deployed without the Mac launcher", async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText }
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <RealExecutionForm apiBaseUrl="https://auto-ux.example" localLaunchEnabled={false} />
+    );
+    fireEvent.change(screen.getByLabelText(/飞书文档链接/), {
+      target: { value: "https://guanghe.feishu.cn/docx/ABC" }
+    });
+    fireEvent.change(screen.getByLabelText(/补充需求/), {
+      target: { value: "配置机器人" }
+    });
+    fireEvent.change(screen.getByLabelText(/本地号码文件路径/), {
+      target: { value: "/Users/demo/phones.xlsx" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "复制任务提示词" }));
+
+    await screen.findByText(/提示词已复制/);
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining("独立模式"));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

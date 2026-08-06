@@ -41,7 +41,8 @@ describe("home page", () => {
 
     const markup = renderToStaticMarkup(createElement(HomePage));
 
-    expect(markup).not.toContain("发起真实配置");
+    expect(markup).toContain("发起真实配置");
+    expect(markup).toContain("复制任务提示词");
     expect(markup).not.toContain("创建演示任务");
   });
 });

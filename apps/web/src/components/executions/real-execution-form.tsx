@@ -15,7 +15,10 @@ import {
 import Link from "next/link";
 import { FormEvent, useState } from "react";
 
-import { buildCodexPrompt } from "./build-codex-prompt";
+import {
+  buildCodexPrompt,
+  buildStandaloneCodexPrompt
+} from "./build-codex-prompt";
 
 type FormState =
   | "idle"
@@ -35,7 +38,7 @@ export function RealExecutionForm({
   apiBaseUrl,
   localLaunchEnabled
 }: {
-  bootstrap: { userId: string; workspaceId: string };
+  bootstrap?: { userId: string; workspaceId: string };
   apiBaseUrl?: string;
   localLaunchEnabled: boolean;
 }) {
@@ -78,6 +81,18 @@ export function RealExecutionForm({
       const robotName = String(data.get("robotName") ?? "");
       const baseUrl = apiBaseUrl ?? window.location.origin;
 
+      if (!localLaunchEnabled) {
+        const standalonePrompt = buildStandaloneCodexPrompt({
+          feishuUrls,
+          requirements,
+          phoneFilePath,
+          robotName
+        });
+        await navigator.clipboard.writeText(standalonePrompt);
+        setState("manual_paste");
+        return;
+      }
+
       buildCodexPrompt({
         executionId: "VALIDATE",
         agentToken: `execution_token:${"0".repeat(64)}`,
@@ -87,8 +102,8 @@ export function RealExecutionForm({
         phoneFilePath,
         robotName
       });
-      if (!localLaunchEnabled) {
-        throw new Error("本机启动功能未启用，请在本地环境开启后重试。");
+      if (!bootstrap) {
+        throw new Error("本地执行会话未配置。");
       }
 
       setState("creating");
@@ -142,13 +157,15 @@ export function RealExecutionForm({
       setCreated(task);
       await launch(task);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "请求失败，请重试。");
+      setError(userFacingError(cause));
       setState("error");
     }
   };
 
   const busy = state === "creating" || state === "launching";
-  const buttonLabel = created
+  const buttonLabel = !localLaunchEnabled
+    ? "复制任务提示词"
+    : created
     ? state === "launching"
       ? "正在打开 Codex"
       : "重试打开 Codex"
@@ -199,7 +216,9 @@ export function RealExecutionForm({
         {state === "manual_paste" ? (
           <MessageBar intent="warning">
             <MessageBarBody>
-              Codex 已打开，提示词已复制到剪贴板。请按 Command+V 粘贴，再点击发送。
+              {localLaunchEnabled
+                ? "Codex 已打开，提示词已复制到剪贴板。请按 Command+V 粘贴，再点击发送。"
+                : "提示词已复制。请在 Mac 上打开 Codex，按 Command+V 粘贴，再点击发送。"}
             </MessageBarBody>
           </MessageBar>
         ) : null}
@@ -217,4 +236,19 @@ async function hashInput(input: Record<string, unknown>): Promise<string> {
   return `sha256:${Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, "0")
   ).join("")}`;
+}
+
+function userFacingError(cause: unknown): string {
+  if (!(cause instanceof Error)) {
+    return "请求失败，请重试。";
+  }
+  const messages: Record<string, string> = {
+    FEISHU_URL_REQUIRED: "请至少填写一个飞书文档链接。",
+    REQUIREMENTS_REQUIRED: "请填写补充需求。",
+    INVALID_PHONE_FILE_PATH: "请输入不含换行的 Mac 本地绝对文件路径。",
+    INVALID_URL: "飞书文档链接必须是有效的 HTTPS 地址。",
+    INVALID_ROBOT_NAME: "机器人名称不能包含换行或空字符。",
+    PROMPT_TOO_LARGE: "任务内容过长，请精简到 32 KiB 以内。"
+  };
+  return messages[cause.message] ?? cause.message;
 }

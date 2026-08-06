@@ -1,17 +1,15 @@
 # auto UX
 
-auto UX 是百度云外呼机器人“一键配置”的本地控制面基础版。网页只展示服务端已持久化的任务进度、证据和确认门；本地 Agent 负责实际执行。
+auto UX 是百度云外呼机器人“一键配置”的网站雏形。用户填写飞书文档、补充需求和 Mac 本地号码文件路径，网站生成与 `$baidu-cloud-one-click-config` 兼容的 Codex 任务。
 
 ## 当前范围
 
-本阶段只有确定性模拟器，用来验证从 PostgreSQL、API、SSE 到网页确认门的完整链路。
+当前提供两种明确区分的使用方式：
 
-- 不读取真实飞书文档或会议纪要。
-- 不打开或修改真实百度云机器人。
-- 不导入真实号码，不启动真实外呼。
-- 未包含发给每个人的 Codex 插件/Skill 安装包。
+- **Mac 本地模式**：创建 `real_codex` 执行，生成 24 小时 Agent 令牌，通过 `pbcopy` 和 `open -a Codex` 打开并粘贴任务；网站接收真实进度事件。
+- **云端雏形模式**：Railway 等云端环境无法直接打开访问者 Mac 上的应用，因此只在浏览器复制独立任务提示词。用户手动打开 Codex 粘贴，仍使用同一个 Skill 完成任务。
 
-真实飞书 CLI 读取、Codex 插件、百度云浏览器自动化、本地号码解析和外呼结果核验是后续集成项，不应把当前模拟结果当作真实平台成功。
+仓库包含 `skills/baidu-cloud-one-click-config`。真实百度操作由 Codex 和该 Skill 执行，不由网站服务器执行。发布、导入号码、开始外呼仍需在 Codex 中分别确认。页面或进度记录不能证明百度平台成功，最终结果必须由平台回读证据确认。
 
 ## 前置条件
 
@@ -26,6 +24,18 @@ pnpm exec playwright install chromium
 ```
 
 ## 启动和停止
+
+### 快速查看网站雏形
+
+```bash
+cp .env.example .env
+pnpm build
+pnpm start
+```
+
+打开 [http://localhost:3000](http://localhost:3000)。生产启动和 Railway 默认展示云端雏形模式，提交后复制任务提示词。
+
+### Mac 本地完整模式
 
 ```bash
 pnpm dev:up
@@ -59,6 +69,18 @@ pnpm dev:down
 | `DEV_WORKSPACE_ID` | `W-1`，演示工作区边界 |
 | `DEV_SESSION_SECRET` | 本地 HttpOnly 会话签名密钥，至少 32 字符 |
 | `AUTO_UX_RUNTIME_DIR` | 运行时 PID、演示执行 ID 和日志目录 |
+| `AUTO_UX_LOCAL_CODEX_LAUNCH` | 本地设为 `1` 时允许服务器调用 Mac 的 `pbcopy`、`open` 和固定 AppleScript；生产环境始终忽略 |
+
+## Railway 雏形部署
+
+Railway 可以使用仓库根目录的标准命令：
+
+```text
+Build: pnpm build
+Start: pnpm start
+```
+
+云端页面会显示真实任务表单并复制独立 Codex 提示词，但不会声称能够从 Railway 打开本地 Codex。需要实时进度、执行令牌和自动打开 Codex 时，请在 Mac 本地运行网站并配置 PostgreSQL。
 
 `.env.example` 只提供本地示例。不要把真实会话、原始文档或完整电话号码写入环境文件。
 

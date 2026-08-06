@@ -8,6 +8,11 @@ export interface RealExecutionPromptInput {
   robotName?: string;
 }
 
+export type StandaloneCodexPromptInput = Pick<
+  RealExecutionPromptInput,
+  "feishuUrls" | "requirements" | "phoneFilePath" | "robotName"
+>;
+
 const MAX_PROMPT_BYTES = 32 * 1024;
 const ExecutionTokenPattern = /^execution_token:[a-f0-9]{64}$/;
 
@@ -43,6 +48,34 @@ export function buildCodexPrompt(input: RealExecutionPromptInput): string {
   return prompt;
 }
 
+export function buildStandaloneCodexPrompt(
+  input: StandaloneCodexPromptInput
+): string {
+  validateTaskInput(input);
+  const prompt = [
+    "请使用 $baidu-cloud-one-click-config 完成下面的真实百度云外呼配置任务。",
+    "当前为独立模式，不向网站上报进度；必须继续遵守 Skill 的本地状态、隐私和确认规则。",
+    "",
+    "任务输入：",
+    ...input.feishuUrls.map((url) => `- 飞书文档: ${url}`),
+    `- 补充需求: ${input.requirements.trim()}`,
+    `- 本地号码文件: ${input.phoneFilePath}`,
+    ...(input.robotName?.trim()
+      ? [`- 机器人名称: ${input.robotName.trim()}`]
+      : []),
+    "",
+    "执行要求：",
+    "1. 使用现有飞书 CLI 登录态读取完整文档。只创建新机器人。",
+    "2. 发布、导入号码、开始外呼必须分别在 Codex 中向我确认。",
+    "3. 不得输出完整号码、Cookie、飞书令牌或百度登录凭据。",
+    "4. 无法验证的结果必须标记为 unknown，不能推测成功。"
+  ].join("\n");
+  if (Buffer.byteLength(prompt, "utf8") > MAX_PROMPT_BYTES) {
+    throw new Error("PROMPT_TOO_LARGE");
+  }
+  return prompt;
+}
+
 function validateInput(input: RealExecutionPromptInput): void {
   if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(input.executionId)) {
     throw new Error("INVALID_EXECUTION_ID");
@@ -51,6 +84,10 @@ function validateInput(input: RealExecutionPromptInput): void {
     throw new Error("INVALID_AGENT_TOKEN");
   }
   validateUrl(input.apiBaseUrl, ["http:", "https:"]);
+  validateTaskInput(input);
+}
+
+function validateTaskInput(input: StandaloneCodexPromptInput): void {
   if (input.feishuUrls.length === 0) {
     throw new Error("FEISHU_URL_REQUIRED");
   }
