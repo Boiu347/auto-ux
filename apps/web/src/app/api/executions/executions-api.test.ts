@@ -13,6 +13,7 @@ import {
   ExecutionService,
   type ConfirmationRecord,
   type ExecutionDataStore,
+  type ExecutionRecord,
   type PersistedStepEvent
 } from "../../../server/executions/service";
 import { getCurrentUser } from "../../../server/auth/current-user";
@@ -321,6 +322,40 @@ describe("execution events API", () => {
       context(createdBody.execution.id)
     );
     expect(otherTenant.status).toBe(404);
+  });
+
+  it("creates a real Codex execution and returns its agent token only once", async () => {
+    const store = new MemoryExecutionStore();
+    const service = new ExecutionService(
+      store.scoped(owner),
+      () => new Date("2026-08-06T00:00:00.000Z"),
+      (bytes) => "c".repeat(bytes * 2)
+    );
+    const collection = createExecutionCollectionHandlers(() => service);
+
+    const response = await collection.POST(
+      request("http://localhost/api/executions", {
+        method: "POST",
+        body: JSON.stringify({
+          configVersion: 1,
+          mode: "real_codex",
+          sourceCount: 2,
+          inputHash: `sha256:${"a".repeat(64)}`
+        })
+      })
+    );
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      execution: { mode: "real_codex" },
+      agentToken: `execution_token:${"c".repeat(64)}`,
+      tokenExpiresAt: "2026-08-07T00:00:00.000Z"
+    });
+    expect(store.createdAgentTokenHash).toBe(
+      createHash("sha256")
+        .update(`execution_token:${"c".repeat(64)}`)
+        .digest("hex")
+    );
   });
 
   it("returns the persisted scoped agent heartbeat in the execution summary", async () => {
@@ -954,6 +989,98 @@ describe("execution events API", () => {
     ).toHaveLength(1);
   });
 
+  it("accepts a fresh local Codex confirmation only for a real execution gate", async () => {
+    const store = confirmationGateStore();
+    store.execution = { ...store.execution!, mode: "real_codex" };
+    store.events = [
+      {
+        cursor: "cursor:EX-1:waiting",
+        event: {
+          ...checkpointEvent(
+            "publish.confirm",
+            "waiting_confirmation",
+            "publish_confirm"
+          ),
+          occurredAt: "2026-08-06T09:59:00.000Z"
+        }
+      }
+    ];
+    const service = new ExecutionService(
+      store,
+      () => new Date("2026-08-06T10:00:00.000Z")
+    );
+
+    await expect(
+      service.appendEvent(
+        "agent-owner",
+        confirmedPublishEvent(1),
+        undefined,
+        undefined,
+        {
+          source: "local_codex",
+          action: "publish",
+          confirmedAt: "2026-08-06T09:59:30.000Z",
+          stateHash: `sha256:${"d".repeat(64)}`
+        }
+      )
+    ).resolves.toBeUndefined();
+    expect(store.confirmations).toHaveLength(0);
+  });
+
+  it("rejects stale, future, mismatched, and simulator local confirmations", async () => {
+    const proof = {
+      source: "local_codex" as const,
+      action: "publish" as const,
+      confirmedAt: "2026-08-06T09:58:00.000Z",
+      stateHash: `sha256:${"d".repeat(64)}`
+    };
+    for (const candidate of [
+      proof,
+      { ...proof, confirmedAt: "2026-08-06T10:01:00.000Z" },
+      { ...proof, action: "start_dial" as const }
+    ]) {
+      const store = confirmationGateStore();
+      store.execution = { ...store.execution!, mode: "real_codex" };
+      store.events = [
+        {
+          cursor: "cursor:EX-1:waiting",
+          event: {
+            ...checkpointEvent(
+              "publish.confirm",
+              "waiting_confirmation",
+              "publish_confirm"
+            ),
+            occurredAt: "2026-08-06T09:59:00.000Z"
+          }
+        }
+      ];
+      const service = new ExecutionService(
+        store,
+        () => new Date("2026-08-06T10:00:00.000Z")
+      );
+      await expect(
+        service.appendEvent(
+          "agent-owner",
+          confirmedPublishEvent(1),
+          undefined,
+          undefined,
+          candidate
+        )
+      ).rejects.toMatchObject({ code: expect.stringContaining("CONFIRMATION") });
+    }
+
+    const simulator = confirmationGateStore();
+    await expect(
+      new ExecutionService(simulator).appendEvent(
+        "agent-owner",
+        confirmedPublishEvent(1),
+        undefined,
+        undefined,
+        { ...proof, confirmedAt: new Date().toISOString() }
+      )
+    ).rejects.toMatchObject({ code: "CONFIRMATION_INVALID" });
+  });
+
   it("does not consume a durable confirmation when the transition is rejected", async () => {
     const store = new MemoryExecutionStore();
     store.execution = {
@@ -1160,6 +1287,50 @@ describe("execution events API", () => {
     expect((await postEvent("session-owner")).status).toBe(201);
   });
 
+  it("accepts agent bearer auth and never falls back after an invalid bearer", async () => {
+    const store = new MemoryExecutionStore();
+    store.execution = { ...executionRecord(), mode: "real_codex" };
+    const agentManifest = {
+      pluginVersion: "mac-local-1.0.0",
+      contractVersion: "1",
+      capabilities: { feishuCli: true, browser: true },
+      agentId: "agent-owner",
+      sessionId: "session-owner",
+      executionId: "EX-1"
+    };
+    const agentAuth = vi.fn(async () => owner);
+    const claim = createAgentClaimHandler(resolve(store), () => null, agentAuth);
+
+    const accepted = await claim(
+      new Request("http://localhost/api/executions/EX-1/agent/claim", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer execution_token:${"a".repeat(64)}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(agentManifest)
+      }),
+      context("EX-1")
+    );
+    expect(accepted.status).toBe(201);
+    expect(agentAuth).toHaveBeenCalled();
+
+    const rejectedClaim = createAgentClaimHandler(
+      resolve(store),
+      () => owner,
+      async () => null
+    );
+    const rejected = await rejectedClaim(
+      request("http://localhost/api/executions/EX-1/agent/claim", {
+        method: "POST",
+        headers: { authorization: "Bearer invalid" },
+        body: JSON.stringify(agentManifest)
+      }),
+      context("EX-1")
+    );
+    expect(rejected.status).toBe(401);
+  });
+
   it("rejects incompatible capability claims, contenders, foreign sessions, and tenants", async () => {
     const store = new MemoryExecutionStore();
     store.execution = executionRecord();
@@ -1243,6 +1414,7 @@ function executionRecord() {
     status: "pending" as ExecutionStatus,
     phase: "source_parse" as ExecutionPhase,
     targetPolicy: "create_only" as const,
+    mode: "simulator" as const,
     createdAt: new Date("2026-07-30T00:00:00.000Z"),
     updatedAt: new Date("2026-07-30T00:00:00.000Z")
   };
@@ -1331,11 +1503,12 @@ async function readFirstSseMessages(
 }
 
 class MemoryExecutionStore implements ExecutionDataStore {
-  execution: ReturnType<typeof executionRecord> | null = null;
+  execution: ExecutionRecord | null = null;
   events: PersistedStepEvent[] = [];
   lockAgentId: string | null = null;
   lockSessionId: string | null = null;
   heartbeatCount = 0;
+  createdAgentTokenHash: string | undefined;
   confirmations: Array<{
     confirmation: ConfirmationRecord;
     tokenHash: string;
@@ -1356,18 +1529,24 @@ class MemoryExecutionStore implements ExecutionDataStore {
     userId: string;
     workspaceId: string;
     configVersion: number;
+    mode?: "simulator" | "real_codex";
+    agentAccessTokenHash?: string;
+    agentAccessExpiresAt?: Date;
   }) {
     const now = new Date("2026-07-30T00:00:00.000Z");
-    this.execution = {
+    const execution: ExecutionRecord = {
       ...executionRecord(),
       id: "EX-1",
       userId: input.userId,
       workspaceId: input.workspaceId,
       configVersion: input.configVersion,
+      mode: input.mode ?? "simulator",
       createdAt: now,
       updatedAt: now
     };
-    return this.execution;
+    this.execution = execution;
+    this.createdAgentTokenHash = input.agentAccessTokenHash;
+    return execution;
   }
 
   async findExecution() {

@@ -25,11 +25,8 @@ export function createExecutionCollectionHandlers(
 
       try {
         const body = CreateExecutionRequestSchema.parse(await request.json());
-        const execution = await resolveService(user).createExecution(
-          user,
-          body.configVersion
-        );
-        return NextResponse.json({ execution }, { status: 201 });
+        const result = await resolveService(user).createExecution(user, body);
+        return NextResponse.json(result, { status: 201 });
       } catch (error) {
         return handleError(error);
       }

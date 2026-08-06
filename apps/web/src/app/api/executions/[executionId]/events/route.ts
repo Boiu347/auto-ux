@@ -10,6 +10,7 @@ import {
   ExecutionService,
   ExecutionServiceError
 } from "../../../../../server/executions/service";
+import { createExecutionAgentAuthenticator } from "../../../../../server/executions/agent-auth";
 
 type RouteContext = {
   params: Promise<{ executionId: string }>;
@@ -17,20 +18,30 @@ type RouteContext = {
 
 type ResolveService = (user: CurrentUser) => ExecutionService;
 type Authenticate = (request: Request) => CurrentUser | null;
+type AuthenticateAgent = (
+  request: Request,
+  executionId: string
+) => Promise<CurrentUser | null>;
+
+const executionAgentAuthenticator = createExecutionAgentAuthenticator();
 
 export function createEventsHandlers(
   resolveService: ResolveService,
-  authenticate: Authenticate = getCurrentUser
+  authenticate: Authenticate = getCurrentUser,
+  authenticateAgent: AuthenticateAgent = (request, executionId) =>
+    executionAgentAuthenticator.authenticate(request, executionId)
 ) {
   return {
     async POST(request: Request, routeContext: RouteContext): Promise<Response> {
-      const user = authenticate(request);
+      const { executionId } = await routeContext.params;
+      const user = request.headers.has("authorization")
+        ? await authenticateAgent(request, executionId)
+        : authenticate(request);
       if (!user) {
         return errorResponse("UNAUTHENTICATED", 401);
       }
 
       try {
-        const { executionId } = await routeContext.params;
         const body = AppendExecutionEventRequestSchema.parse(
           await request.json()
         );
@@ -42,7 +53,8 @@ export function createEventsHandlers(
           body.agentId,
           body.event,
           body.confirmation,
-          body.sessionId
+          body.sessionId,
+          body.localConfirmation
         );
         return NextResponse.json({ event: body.event }, { status: 201 });
       } catch (error) {

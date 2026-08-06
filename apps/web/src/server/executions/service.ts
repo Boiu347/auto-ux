@@ -4,9 +4,13 @@ import {
   AgentCapabilityManifestSchema,
   ConfirmationActionSchema,
   ExecutionEventSchema,
+  ExecutionModeSchema,
+  LocalConfirmationProofSchema,
   type ConfirmationAction,
   type AgentCapabilityManifest,
   type ExecutionEvent,
+  type ExecutionMode,
+  type LocalConfirmationProof,
   type ExecutionPhase,
   type ExecutionStatus
 } from "@app/contracts";
@@ -32,6 +36,7 @@ import {
   type ConfirmationGrant
 } from "@app/execution-core";
 import { z } from "zod";
+import { hashAgentToken } from "./agent-auth";
 
 export type {
   ConfirmationRecord,
@@ -47,11 +52,28 @@ const ConfirmationTokenSchema = z
   .string()
   .regex(/^confirm_token:[a-f0-9]{64}$/);
 
-export const CreateExecutionRequestSchema = z
-  .object({
-    configVersion: z.number().int().positive()
-  })
-  .strict();
+const InputHashSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+
+export const CreateExecutionRequestSchema = z.discriminatedUnion("mode", [
+  z
+    .object({
+      configVersion: z.number().int().positive(),
+      mode: z.literal("real_codex"),
+      sourceCount: z.number().int().positive(),
+      inputHash: InputHashSchema
+    })
+    .strict(),
+  z
+    .object({
+      configVersion: z.number().int().positive(),
+      mode: z.literal("simulator").optional()
+    })
+    .strict()
+]);
+
+export type CreateExecutionRequest = z.infer<
+  typeof CreateExecutionRequestSchema
+>;
 
 export const AppendExecutionEventRequestSchema = z
   .object({
@@ -66,7 +88,8 @@ export const AppendExecutionEventRequestSchema = z
         configVersion: z.number().int().positive()
       })
       .strict()
-      .optional()
+      .optional(),
+    localConfirmation: LocalConfirmationProofSchema.optional()
   })
   .strict();
 
@@ -96,6 +119,9 @@ export interface ExecutionDataStore {
     userId: string;
     workspaceId: string;
     configVersion: number;
+    mode?: ExecutionMode;
+    agentAccessTokenHash?: string;
+    agentAccessExpiresAt?: Date;
   }): Promise<ExecutionRecord>;
   findExecution(executionId: string): Promise<ExecutionRecord | null>;
   findExecutionAgentHeartbeat(
@@ -174,9 +200,41 @@ export class ExecutionService {
 
   async createExecution(
     scope: RepositoryScope,
-    configVersion: number
-  ): Promise<ExecutionRecord> {
-    return this.store.createExecution({ ...scope, configVersion });
+    request: CreateExecutionRequest | number
+  ): Promise<{
+    execution: ExecutionRecord;
+    agentToken?: string;
+    tokenExpiresAt?: string;
+  }> {
+    const input: CreateExecutionRequest =
+      typeof request === "number"
+        ? { configVersion: request, mode: "simulator" }
+        : request;
+    const mode = ExecutionModeSchema.parse(input.mode ?? "simulator");
+    if (mode === "simulator") {
+      return {
+        execution: await this.store.createExecution({
+          ...scope,
+          configVersion: input.configVersion,
+          mode
+        })
+      };
+    }
+
+    const agentToken = `execution_token:${this.randomHex(32)}`;
+    const expiresAt = new Date(this.now().getTime() + 24 * 60 * 60_000);
+    const execution = await this.store.createExecution({
+      ...scope,
+      configVersion: input.configVersion,
+      mode,
+      agentAccessTokenHash: hashAgentToken(agentToken),
+      agentAccessExpiresAt: expiresAt
+    });
+    return {
+      execution,
+      agentToken,
+      tokenExpiresAt: expiresAt.toISOString()
+    };
   }
 
   async getExecution(executionId: string): Promise<{
@@ -242,14 +300,39 @@ export class ExecutionService {
     agentId: string,
     event: ExecutionEvent,
     confirmation?: ConfirmationProof,
-    sessionId?: string
+    sessionId?: string,
+    localConfirmation?: LocalConfirmationProof
   ): Promise<void> {
     const validatedEvent = ExecutionEventSchema.parse(event);
     const execution = await this.requireExecution(validatedEvent.executionId);
     const phase = phaseForStep(validatedEvent.stepId);
-    const preparedConfirmation = confirmation
-      ? await this.preparePersistedConfirmation(execution, confirmation)
-      : undefined;
+    const expectedAction = confirmationActionForPhase(execution.phase);
+    let preparedConfirmation:
+      | { grant: ConfirmationGrant; claim?: ConfirmationClaim }
+      | undefined;
+    if (execution.mode === "real_codex") {
+      if (confirmation) {
+        throw new ExecutionServiceError("CONFIRMATION_INVALID", 409);
+      }
+      if (expectedAction && execution.status === "waiting_confirmation") {
+        if (!localConfirmation) {
+          throw new ExecutionServiceError("CONFIRMATION_INVALID", 409);
+        }
+        preparedConfirmation = await this.prepareLocalConfirmation(
+          execution,
+          localConfirmation
+        );
+      } else if (localConfirmation) {
+        throw new ExecutionServiceError("CONFIRMATION_INVALID", 409);
+      }
+    } else {
+      if (localConfirmation) {
+        throw new ExecutionServiceError("CONFIRMATION_INVALID", 409);
+      }
+      preparedConfirmation = confirmation
+        ? await this.preparePersistedConfirmation(execution, confirmation)
+        : undefined;
+    }
     let nextStatus: ExecutionStatus;
     try {
       nextStatus = transition(
@@ -499,6 +582,52 @@ export class ExecutionService {
     }
     return { grant: consumption.grant, claim };
   }
+
+  private async prepareLocalConfirmation(
+    execution: ExecutionRecord,
+    proof: LocalConfirmationProof
+  ): Promise<{ grant: ConfirmationGrant }> {
+    const validated = LocalConfirmationProofSchema.parse(proof);
+    const expectedAction = confirmationActionForPhase(execution.phase);
+    if (!expectedAction || validated.action !== expectedAction) {
+      throw new ExecutionServiceError("CONFIRMATION_ACTION_MISMATCH", 409);
+    }
+    const confirmedAt = new Date(validated.confirmedAt);
+    if (confirmedAt.getTime() > this.now().getTime()) {
+      throw new ExecutionServiceError("CONFIRMATION_INVALID", 409);
+    }
+    const events = await this.store.listEventsAfter(execution.id);
+    const waitingEvent = events
+      .filter(
+        ({ event }) =>
+          event.status === "waiting_confirmation" &&
+          phaseForStep(event.stepId) === execution.phase
+      )
+      .at(-1);
+    const gateOpenedAt = waitingEvent
+      ? new Date(waitingEvent.event.occurredAt)
+      : execution.updatedAt;
+    if (confirmedAt.getTime() < gateOpenedAt.getTime()) {
+      throw new ExecutionServiceError("CONFIRMATION_INVALID", 409);
+    }
+
+    const token = issueDomainConfirmation(
+      validated.action,
+      execution.id,
+      execution.configVersion,
+      new Date(Date.now() + 60_000)
+    );
+    const consumption = consumeDomainConfirmation(
+      token,
+      validated.action,
+      execution.id,
+      execution.configVersion
+    );
+    if (!consumption.ok) {
+      throw new ExecutionServiceError("CONFIRMATION_INVALID", 409);
+    }
+    return { grant: consumption.grant };
+  }
 }
 
 function enqueueEvent(
@@ -536,6 +665,9 @@ class PrismaExecutionDataStore implements ExecutionDataStore {
     userId: string;
     workspaceId: string;
     configVersion: number;
+    mode?: ExecutionMode;
+    agentAccessTokenHash?: string;
+    agentAccessExpiresAt?: Date;
   }): Promise<ExecutionRecord> {
     return this.repository.create(input);
   }
