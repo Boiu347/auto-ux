@@ -283,8 +283,12 @@ describe("execution contracts", () => {
   it("accepts only the exact supported local-agent capability handshake", () => {
     const manifest = {
       pluginVersion: "simulator-1.0.0",
-      contractVersion: "1",
-      capabilities: { feishuCli: true, browser: true },
+      contractVersion: "2",
+      capabilities: {
+        feishuCli: true,
+        baiduApi: true,
+        browserFallback: true
+      },
       agentId: "agent-simulator",
       sessionId: "session-EX-1",
       executionId: "EX-1"
@@ -300,7 +304,7 @@ describe("execution contracts", () => {
     expect(
       AgentCapabilityManifestSchema.safeParse({
         ...manifest,
-        capabilities: { ...manifest.capabilities, browser: false }
+        capabilities: { ...manifest.capabilities, baiduApi: false }
       }).success
     ).toBe(false);
     expect(

@@ -5,7 +5,7 @@ import {
   type ExecutionStatus
 } from "@app/contracts";
 
-export const SUPPORTED_CONTRACT_VERSION = "1";
+export const SUPPORTED_CONTRACT_VERSION = "2";
 const LOCK_TTL_MS = 60_000;
 
 export interface AgentCapabilityManifest {
@@ -13,7 +13,8 @@ export interface AgentCapabilityManifest {
   contractVersion: string;
   capabilities: {
     feishuCli: boolean;
-    browser: boolean;
+    baiduApi: boolean;
+    browserFallback: boolean;
   };
   agentId: string;
   sessionId: string;
@@ -322,7 +323,11 @@ export class FakeConfirmationBridge implements ConfirmationBridge {
     return this.api.issueConfirmation(request.action, {
       pluginVersion: "simulator-1.0.0",
       contractVersion: SUPPORTED_CONTRACT_VERSION,
-      capabilities: { feishuCli: true, browser: true },
+      capabilities: {
+        feishuCli: true,
+        baiduApi: true,
+        browserFallback: true
+      },
       agentId: request.agentId,
       sessionId: request.sessionId,
       executionId: request.executionId
@@ -441,9 +446,11 @@ function validateManifest(
     typeof capabilities !== "object" ||
     capabilities === null ||
     !("feishuCli" in capabilities) ||
-    !("browser" in capabilities) ||
+    !("baiduApi" in capabilities) ||
+    !("browserFallback" in capabilities) ||
     capabilities.feishuCli !== true ||
-    capabilities.browser !== true
+    capabilities.baiduApi !== true ||
+    capabilities.browserFallback !== true
   ) {
     throw new AgentClientError("MISSING_CAPABILITY");
   }

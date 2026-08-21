@@ -18,6 +18,8 @@ auto UX 是百度云外呼机器人“一键配置”的网站雏形。用户填
 - Docker Desktop（可运行 Docker Compose）
 - Playwright Chromium
 
+真实百度 API 模式还需要在客悦“系统管理 → API 配置”创建 AK/SK。推荐在 Skill 目录运行 `python3 scripts/baidu_credentials.py set`，通过交互提示写入 macOS Keychain；不要把 AK/SK 放入仓库、网站环境变量或任务提示词。完成后可运行 `python3 scripts/baidu_robot_api.py preflight` 做只读连通性检查。
+
 ```bash
 pnpm install
 pnpm exec playwright install chromium

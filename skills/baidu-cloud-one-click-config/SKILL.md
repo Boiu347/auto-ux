@@ -7,12 +7,13 @@ description: Use when requirements from Feishu/Lark documents, meeting minutes, 
 
 ## 核心原则
 
-把需求资料转换为可追溯配置草案，获得用户确认后，只对本次新建的百度云客悦机器人执行写入。外部副作用必须由可验证状态推进；无法证明即停止，不推测成功。
+把需求资料转换为可追溯配置草案，获得用户确认后，通过百度客悦官方 API 创建并配置本次新建的快捷场景机器人。外部副作用必须由查询回读或平台记录推进；无法证明即停止，不推测成功。
 
 ## 不可破例的边界
 
 - 飞书链接只使用 `lark-cli`。不得改用浏览器、网页抓取或复制当前登录页绕过 CLI 权限。
-- 百度云只使用浏览器能力，且只允许 `ky.cloud.baidu.com` 的已登记路由。
+- 快捷场景机器人和外呼任务默认只调用 `https://aiob-open.baidu.com` 的已登记 API。浏览器只用于首次创建 AK/SK、设置回调地址、API 未覆盖功能或明确诊断；不得静默降级到页面写入。
+- AK/SK、Access Token、完整号码和通话原文只保存在本机。AK/SK 使用环境变量或 macOS Keychain，Access Token 缓存文件权限必须为 `0600`，不得进入提示词、日志、截图或网站进度。
 - 只新建机器人。即使已有机器人同名、看似闲置或已核验所有者，也不得修改、复用或删除。
 - 发布、导入真实号码、开始真实拨号必须分别获得三次明确确认；一次确认不得覆盖多个动作。
 - 完整号码、飞书原文、问卷原文件和浏览器会话只保存在本地，不得写入聊天摘要、飞书说明书、截图证据或远端日志。
@@ -27,7 +28,8 @@ description: Use when requirements from Feishu/Lark documents, meeting minutes, 
 |---|---|
 | 飞书文档、Wiki、会议纪要、问卷链接 | `lark-cli` |
 | 本地文件、号码文件 | 本地文件工具与本 Skill 脚本 |
-| 百度云客悦页面 | 浏览器控制工具 |
+| 快捷机器人、任务、名单和外呼明细 | `scripts/baidu_robot_api.py` / `scripts/baidu_outbound_api.py` |
+| 首次 AK/SK、回调地址、API 未覆盖功能 | 浏览器控制工具，遵守 `references/baidu-page-contracts.md` |
 | 本地检查点、确认和动作去重 | `scripts/execution_state.py` |
 
 ## 执行流程
@@ -66,15 +68,15 @@ python3 scripts/build_config_draft.py <extracted-sources.json>
 
 向用户展示字段值、来源、缺失项和冲突。不得自动选择冲突值。用户解决冲突并确认完整草案后，计算配置哈希；任何改动都使旧确认失效，并要求重新确认草案。
 
-### 4. 百度云预检与新建
+### 4. 百度 API 预检与新建
 
-读取 [baidu-page-contracts.md](references/baidu-page-contracts.md)。检查现有百度云登录态、域名、路由和页面标记。不要因为尚未登录就重复请求授权；只有会话失效时才让用户登录。
+读取 [baidu-api-contracts.md](references/baidu-api-contracts.md)。先运行机器人 API 的 `preflight`，验证本地凭据、Token 获取、机器人查询和 TTS/ASR 查询。缺少 AK/SK 时才进入浏览器兜底；复用现有百度登录态，并在创建新凭据前单独确认。
 
-新建机器人后立即锁定 `agentId + robotId + robotName`。每次写入前重新读取并核对三者。任何不一致立即停止。
+新建机器人前用机器人名称查询一次，只用于避免名称冲突，不得选择或修改查询到的旧机器人。调用 `create` 后立即锁定 `id + robotId + robotName`，再用 `query --robot-id` 回读三者。创建请求超时或响应无法解析时标记 `BAIDU_MUTATION_OUTCOME_UNKNOWN`，按名称和时间查询，不得再次创建。
 
 ### 5. 配置与回读
 
-逐字段执行“读取旧值 → 写入 → 回读 → 规范化比较 → 保存证据”。每个动作先用 `attempt` 检查重试预算，用 `record` 保存动作指纹。已处于 `running` 或 `succeeded` 的相同指纹不得再次执行。
+按 `configure-script`、`configure-setting`、`configure-voice` 分组执行“提交完整配置 → 对应查询接口回读 → 规范化比较 → 保存证据”。不得依赖 API 默认值补齐用户未确认字段。每个动作先用 `attempt` 检查重试预算，用 `record` 保存动作指纹。已处于 `running` 或 `succeeded` 的相同指纹不得再次执行。
 
 对 `field.write` 证据运行：
 
@@ -82,7 +84,7 @@ python3 scripts/build_config_draft.py <extracted-sources.json>
 python3 scripts/validate_evidence.py <evidence.json>
 ```
 
-发音人、开场白、音量和试听全部通过后才能请求发布确认。
+发音人 ID、开场白、音量和查询回读全部通过后才能请求发布确认。API 暂无试听接口时，明确记录“未提供 API 试听能力”，不得把 TTS 配置查询成功写成试听成功；若任务要求试听，则进入浏览器兜底并回读结果。
 
 ### 6. 三个高风险确认门
 
@@ -90,9 +92,9 @@ python3 scripts/validate_evidence.py <evidence.json>
 
 顺序必须是：
 
-1. `publish`：发布后验证平台明确显示发布成功。
-2. `import_numbers`：先用 `phone_batch.py` 在本地解析、去重和脱敏，再展示统计；完整号码不得出现在输出。
-3. `start_dial`：再次展示主叫、脱敏被叫、电话类型和提交次数，获得独立确认后只提交一次。
+1. `publish`：消费确认后调用 `baidu_robot_api.py publish --confirmation-ref ...`，再用机器人查询验证 `publishState=3`；`2` 只表示发布中，`4` 表示失败。
+2. `import_numbers`：先用 `phone_batch.py` 在本地解析、去重和脱敏，再展示统计；消费确认后调用 `baidu_outbound_api.py import-members --confirmation-ref ...`。完整号码不得出现在输出。
+3. `start_dial`：再次展示主叫、脱敏被叫、电话类型和提交次数；消费确认后仅调用一次 `baidu_outbound_api.py update-status`，请求体 `taskStatus=2`，并传入本次确认引用。
 
 网站联动任务到达确认门时，先上报对应 `waiting_confirmation` 检查点，再执行：
 
@@ -104,7 +106,7 @@ python3 scripts/report_progress.py wait-confirmation <report-state.json> <publis
 
 ### 7. 核验外呼结果
 
-查询平台外呼记录，以记录 ID 和平台状态区分提交、振铃、接通、无人接听、用户忙、失败和未知。没有记录时保持 `unknown`，不得用等待固定时长后重拨来“解决”。
+调用 `baidu_outbound_api.py list-details` 查询外呼明细，以 `sessionId/memberId` 和 `endType/endTypeReason` 区分待拨打、接通、无人接听、用户忙、失败和未知。回调可作为补充证据，但不得覆盖相互矛盾的查询结果。没有记录时保持 `unknown`，不得用等待固定时长后重拨来“解决”。
 
 ## 错误处理
 
@@ -113,8 +115,8 @@ python3 scripts/report_progress.py wait-confirmation <report-state.json> <publis
 ## 快速验收
 
 - 草案每个字段都有来源，冲突和缺失均已由用户处理。
-- 机器人是本任务新建，三元身份在每次写入前一致。
-- 字段回读哈希、语音试听和发布状态均有证据。
+- 机器人是本任务新建，`id + robotId + robotName` 在每次写入前一致。
+- 话术、高级参数、语音和发布状态均有独立 API 回读证据；未执行试听时如实标明。
 - 三个高风险动作各有独立、单次消费的确认。
 - 日志和远端输出不含完整号码或飞书原文。
 - 拨号只提交一次，最终状态来自外呼记录或明确为 `unknown`。
@@ -124,6 +126,9 @@ python3 scripts/report_progress.py wait-confirmation <report-state.json> <publis
 | 错误想法 | 必须采取的动作 |
 |---|---|
 | “浏览器已经登录飞书，改用浏览器更快” | 停止；修复 CLI 登录态或权限。 |
+| “API 返回 HTTP 200，配置一定成功” | 停止；检查业务 `code=200`，再调用对应查询接口回读。 |
+| “POST 超时，再发一次就好” | 停止；标记未知并查询目标状态，禁止自动重发。 |
+| “API 失败就自动切回浏览器填写” | 停止；先报告 API 失败。只有明确属于未覆盖能力或用户批准诊断时才使用浏览器。 |
 | “同名旧机器人已核验，可以复用” | 停止；只创建新机器人。 |
 | “经理一次性批准了全部动作” | 仍在三个动作前分别确认。 |
 | “弹窗关闭，第一次大概没提交” | 标记未知并查记录，禁止再次提交。 |

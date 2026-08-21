@@ -30,11 +30,12 @@ const OpaqueReferenceIdSchema = z
 export const AgentCapabilityManifestSchema = z
   .object({
     pluginVersion: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
-    contractVersion: z.literal("1"),
+    contractVersion: z.literal("2"),
     capabilities: z
       .object({
         feishuCli: z.literal(true),
-        browser: z.literal(true)
+        baiduApi: z.literal(true),
+        browserFallback: z.literal(true)
       })
       .strict(),
     agentId: IdentifierSchema,
@@ -209,7 +210,13 @@ const ErrorCodeSchema = z.enum([
   "TARGET_MISMATCH",
   "PAGE_INCOMPATIBLE",
   "PUBLISH_NOT_VERIFIED",
-  "PHONE_PARSE_INVALID"
+  "PHONE_PARSE_INVALID",
+  "BAIDU_CREDENTIALS_MISSING",
+  "BAIDU_AUTH_REJECTED",
+  "BAIDU_RATE_LIMITED",
+  "BAIDU_API_REJECTED",
+  "BAIDU_MUTATION_OUTCOME_UNKNOWN",
+  "BAIDU_READBACK_MISMATCH"
 ]);
 
 const NextActionSchema = z.enum([

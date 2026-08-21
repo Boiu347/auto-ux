@@ -68,9 +68,10 @@ export class PrismaDeviceStore implements DeviceStore {
           workspaceId: pairing.workspaceId,
           version: input.version,
           capabilities: {
-            contractVersion: "1",
+            contractVersion: "2",
             feishuCli: true,
-            browser: true,
+            baiduApi: true,
+            browserFallback: true,
             delivery: "mac_helper"
           },
           lastHeartbeatAt: input.now

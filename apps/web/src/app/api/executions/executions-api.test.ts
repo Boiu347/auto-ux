@@ -1227,8 +1227,8 @@ describe("execution events API", () => {
     const heartbeat = createAgentHeartbeatHandler(resolve(store));
     const agentManifest = {
       pluginVersion: "simulator-1.0.0",
-      contractVersion: "1",
-      capabilities: { feishuCli: true, browser: true },
+      contractVersion: "2",
+      capabilities: { feishuCli: true, baiduApi: true, browserFallback: true },
       agentId: "agent-owner",
       sessionId: "session-owner",
       executionId: "EX-1"
@@ -1293,8 +1293,8 @@ describe("execution events API", () => {
     store.execution = { ...executionRecord(), mode: "real_codex" };
     const agentManifest = {
       pluginVersion: "mac-local-1.0.0",
-      contractVersion: "1",
-      capabilities: { feishuCli: true, browser: true },
+      contractVersion: "2",
+      capabilities: { feishuCli: true, baiduApi: true, browserFallback: true },
       agentId: "agent-owner",
       sessionId: "session-owner",
       executionId: "EX-1"
@@ -1339,8 +1339,8 @@ describe("execution events API", () => {
     const heartbeat = createAgentHeartbeatHandler(resolve(store));
     const manifest = {
       pluginVersion: "simulator-1.0.0",
-      contractVersion: "1",
-      capabilities: { feishuCli: true, browser: true },
+      contractVersion: "2",
+      capabilities: { feishuCli: true, baiduApi: true, browserFallback: true },
       agentId: "agent-owner",
       sessionId: "session-owner",
       executionId: "EX-1"

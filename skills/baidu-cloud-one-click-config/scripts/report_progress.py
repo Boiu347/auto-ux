@@ -106,8 +106,12 @@ def main() -> None:
             "sessionId": f"Session_{secrets.token_hex(12)}",
         }
         claimed = request_json(state, "POST", f"/api/executions/{args.execution_id}/agent/claim", {
-            "pluginVersion": "1.1.0", "contractVersion": "1",
-            "capabilities": {"feishuCli": True, "browser": True},
+            "pluginVersion": "2.0.0", "contractVersion": "2",
+            "capabilities": {
+                "feishuCli": True,
+                "baiduApi": True,
+                "browserFallback": True,
+            },
             "agentId": state["agentId"], "sessionId": state["sessionId"],
             "executionId": state["executionId"],
         })

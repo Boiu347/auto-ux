@@ -552,7 +552,8 @@ export class PrismaExecutionRepository implements ExecutionRepository {
       const capabilities = {
         contractVersion: manifest.contractVersion,
         feishuCli: manifest.capabilities.feishuCli,
-        browser: manifest.capabilities.browser,
+        baiduApi: manifest.capabilities.baiduApi,
+        browserFallback: manifest.capabilities.browserFallback,
         sessionId: manifest.sessionId,
         executionId: manifest.executionId
       };

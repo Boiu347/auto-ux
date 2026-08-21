@@ -7,7 +7,15 @@ from collections import defaultdict
 from pathlib import Path
 
 
-REQUIRED_FIELDS = ("robotName", "openingLine", "voice")
+REQUIRED_FIELDS = (
+    "robotName",
+    "role",
+    "audience",
+    "businessGoal",
+    "openingLine",
+    "voice",
+    "asr",
+)
 
 
 def build_draft(sources: list) -> dict:

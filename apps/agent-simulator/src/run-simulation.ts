@@ -294,7 +294,7 @@ function defaultManifest(executionId: string): AgentCapabilityManifest {
   return {
     pluginVersion: "simulator-1.0.0",
     contractVersion: SUPPORTED_CONTRACT_VERSION,
-    capabilities: { feishuCli: true, browser: true },
+    capabilities: { feishuCli: true, baiduApi: true, browserFallback: true },
     agentId: "agent-simulator",
     sessionId: `session-${executionId}`,
     executionId

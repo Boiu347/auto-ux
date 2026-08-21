@@ -19,8 +19,8 @@ import { runSimulation } from "./run-simulation.ts";
 
 const manifest: AgentCapabilityManifest = {
   pluginVersion: "simulator-1.0.0",
-  contractVersion: "1",
-  capabilities: { feishuCli: true, browser: true },
+  contractVersion: "2",
+  capabilities: { feishuCli: true, baiduApi: true, browserFallback: true },
   agentId: "agent-simulator",
   sessionId: "session-EX-1",
   executionId: "EX-1"
@@ -81,12 +81,35 @@ describe("local agent simulator", () => {
     ["an incompatible contract", { contractVersion: "0" }, "INCOMPATIBLE_CONTRACT"],
     [
       "a missing Feishu CLI capability",
-      { capabilities: { feishuCli: false, browser: true } },
+      {
+        capabilities: {
+          feishuCli: false,
+          baiduApi: true,
+          browserFallback: true
+        }
+      },
       "MISSING_CAPABILITY"
     ],
     [
-      "a missing browser capability",
-      { capabilities: { feishuCli: true, browser: false } },
+      "a missing Baidu API capability",
+      {
+        capabilities: {
+          feishuCli: true,
+          baiduApi: false,
+          browserFallback: true
+        }
+      },
+      "MISSING_CAPABILITY"
+    ],
+    [
+      "a missing browser fallback capability",
+      {
+        capabilities: {
+          feishuCli: true,
+          baiduApi: true,
+          browserFallback: false
+        }
+      },
       "MISSING_CAPABILITY"
     ]
   ])("rejects %s without silently downgrading", async (_name, override, code) => {

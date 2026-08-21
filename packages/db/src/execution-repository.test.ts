@@ -193,8 +193,12 @@ describe("PrismaExecutionRepository", () => {
     });
     const manifest = {
       pluginVersion: "simulator-1.0.0",
-      contractVersion: "1" as const,
-      capabilities: { feishuCli: true as const, browser: true as const },
+      contractVersion: "2" as const,
+      capabilities: {
+        feishuCli: true as const,
+        baiduApi: true as const,
+        browserFallback: true as const
+      },
       agentId: "agent-owner",
       sessionId: "session-owner",
       executionId: execution.id
@@ -232,9 +236,10 @@ describe("PrismaExecutionRepository", () => {
       workspaceId: "W-1",
       version: "simulator-1.0.0",
       capabilities: {
-        contractVersion: "1",
+        contractVersion: "2",
         feishuCli: true,
-        browser: true,
+        baiduApi: true,
+        browserFallback: true,
         sessionId: "session-owner",
         executionId: execution.id
       }
@@ -249,8 +254,12 @@ describe("PrismaExecutionRepository", () => {
     });
     const manifest = {
       pluginVersion: "simulator-1.0.0",
-      contractVersion: "1" as const,
-      capabilities: { feishuCli: true as const, browser: true as const },
+      contractVersion: "2" as const,
+      capabilities: {
+        feishuCli: true as const,
+        baiduApi: true as const,
+        browserFallback: true as const
+      },
       agentId: "agent-owner",
       sessionId: "session-owner",
       executionId: execution.id
@@ -288,8 +297,12 @@ describe("PrismaExecutionRepository", () => {
     });
     const manifest = {
       pluginVersion: "simulator-1.0.0",
-      contractVersion: "1" as const,
-      capabilities: { feishuCli: true as const, browser: true as const },
+      contractVersion: "2" as const,
+      capabilities: {
+        feishuCli: true as const,
+        baiduApi: true as const,
+        browserFallback: true as const
+      },
       agentId: "agent-owner",
       sessionId: "session-owner",
       executionId: execution.id
@@ -335,8 +348,12 @@ describe("PrismaExecutionRepository", () => {
     });
     const baseManifest = {
       pluginVersion: "simulator-1.0.0",
-      contractVersion: "1" as const,
-      capabilities: { feishuCli: true as const, browser: true as const },
+      contractVersion: "2" as const,
+      capabilities: {
+        feishuCli: true as const,
+        baiduApi: true as const,
+        browserFallback: true as const
+      },
       agentId: "agent-owner"
     };
 

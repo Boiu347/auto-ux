@@ -36,12 +36,12 @@ export function buildCodexPrompt(input: RealExecutionPromptInput): string {
       : []),
     "",
     "执行要求：",
-    "1. 先读取 Skill 和飞书文档，使用现有登录态；仅在令牌失效或确实缺少权限时请求授权。",
+    "1. 先读取 Skill 和飞书文档，使用现有登录态；百度快捷机器人和外呼任务默认使用官方 API，仅在凭据缺失、API 未覆盖或明确诊断时使用浏览器。",
     "2. 只创建新机器人，不覆盖现有机器人。发布、导入号码、开始外呼必须分别在 Codex 中向我确认。",
     "3. 按 Skill 的网站联动章节初始化回报器，并在每个可验证阶段上报真实事件；不得伪造或推测进度。",
     "4. 三个高风险确认门都要同时等待网站或 Codex 的单项决定，先提交的一端生效；拒绝时立即停止对应动作。",
     "5. 不得输出完整号码、Cookie、飞书令牌或百度登录凭据。号码只能显示掩码。",
-    "6. 遇到页面字段无法确认时停止并说明，不能把推测写成成功。"
+    "6. 每次 API 写入后必须查询回读；POST 结果未知时停止并查询状态，禁止自动重发或静默切回浏览器。"
   ].join("\n");
   if (Buffer.byteLength(prompt, "utf8") > MAX_PROMPT_BYTES) {
     throw new Error("PROMPT_TOO_LARGE");
@@ -66,10 +66,10 @@ export function buildStandaloneCodexPrompt(
       : []),
     "",
     "执行要求：",
-    "1. 使用现有飞书 CLI 登录态读取完整文档。只创建新机器人。",
+    "1. 使用现有飞书 CLI 登录态读取完整文档。百度快捷机器人默认走官方 API，并且只创建新机器人。",
     "2. 发布、导入号码、开始外呼必须分别在 Codex 中向我确认。",
     "3. 不得输出完整号码、Cookie、飞书令牌或百度登录凭据。",
-    "4. 无法验证的结果必须标记为 unknown，不能推测成功。"
+    "4. API 写入后必须查询回读；无法验证的结果标记为 unknown，禁止自动重发或静默切回浏览器。"
   ].join("\n");
   if (Buffer.byteLength(prompt, "utf8") > MAX_PROMPT_BYTES) {
     throw new Error("PROMPT_TOO_LARGE");
