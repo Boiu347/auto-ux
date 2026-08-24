@@ -31,7 +31,13 @@ process_status() {
   if ! kill -0 "$PID" 2>/dev/null; then
     return 1
   fi
-  STATE=$(ps -p "$PID" -o state= 2>/dev/null | tr -d '[:space:]')
+  if [ -r "/proc/$PID/stat" ]; then
+    STATE=$(sed 's/^.*) //; s/ .*//' "/proc/$PID/stat" 2>/dev/null || true)
+  elif command -v ps >/dev/null 2>&1; then
+    STATE=$(ps -p "$PID" -o state= 2>/dev/null | tr -d '[:space:]')
+  else
+    STATE=""
+  fi
   if [ -z "$STATE" ]; then
     if ! kill -0 "$PID" 2>/dev/null; then
       return 1
@@ -57,7 +63,13 @@ else
   exit 2
 fi
 
-COMMAND=$(ps -p "$PID" -o command= 2>/dev/null || true)
+if [ -r "/proc/$PID/cmdline" ]; then
+  COMMAND=$(tr '\000' ' ' < "/proc/$PID/cmdline" 2>/dev/null || true)
+elif command -v ps >/dev/null 2>&1; then
+  COMMAND=$(ps -p "$PID" -o command= 2>/dev/null || true)
+else
+  COMMAND=""
+fi
 EXPECTED_PREFIX="/bin/sh $OWNED_WRAPPER $MARKER $METADATA_FILE "
 case "$COMMAND" in
   "$EXPECTED_PREFIX"*) ;;

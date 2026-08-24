@@ -24,7 +24,6 @@ validate_project:
     COREPACK_HOME: /tmp/corepack
     NEXT_PUBLIC_BASE_PATH: /auto-ux
   before_script:
-    - apt-get update && apt-get install -y --no-install-recommends openssl procps && rm -rf /var/lib/apt/lists/*
     - corepack enable
     - corepack prepare pnpm@11.9.0 --activate
     - pnpm install --frozen-lockfile
