@@ -39,7 +39,8 @@ validate_project:
     - pnpm build
     - pnpm lint
     - pnpm typecheck
-    - pnpm test:scripts
+    - ./tests/integration/process-ownership.test.sh
+    - node --test scripts/mac-agent.test.mjs
     - pnpm --filter @app/contracts test
     - pnpm --filter @app/execution-core test
     - pnpm --filter @app/db exec vitest run src/execution-repository.test.ts
@@ -61,6 +62,12 @@ validate_project:
       const failed = Object.entries(checks).filter(([, value]) => !value).map(([name]) => name);
       if (failed.length) throw new Error(`invalid NX deployment contract: ${failed.join(", ")}`);
       NODE
+
+validate_python:
+  stage: validate
+  image: python:3.12
+  script:
+    - PYTHONPYCACHEPREFIX=/tmp/auto-ux-pycache python3 -m unittest tests/report_progress_test.py tests/test_skill_scripts.py
 
 .nx_deploy:
   stage: deploy
@@ -116,7 +123,7 @@ deploy_preview:
     - ssh -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$PREVIEW_DEPLOY_USER@$PREVIEW_DEPLOY_HOST" "preview auto-ux $CI_COMMIT_SHA $CI_MERGE_REQUEST_IID service" < nx-project.tar.gz
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $PREVIEW_DEPLOY_KEY != "" && $PREVIEW_DEPLOY_HOST != "" && $PREVIEW_DEPLOY_USER != "" && $PREVIEW_DEPLOY_HOST_KEY != ""'
-  needs: [validate_project]
+  needs: [validate_project, validate_python]
 
 deploy_production:
   extends: .nx_deploy
@@ -133,7 +140,7 @@ deploy_production:
     - ssh -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$PRODUCTION_DEPLOY_USER@$PRODUCTION_DEPLOY_HOST" "deploy auto-ux $CI_COMMIT_SHA service" < nx-project.tar.gz
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $PRODUCTION_DEPLOY_ENABLED == "1"'
-  needs: [validate_project]
+  needs: [validate_project, validate_python]
 
 rollback_production:
   extends: .nx_deploy
