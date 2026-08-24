@@ -17,6 +17,7 @@ import {
 } from "@fluentui/react-components";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
+import { publicPath } from "../../lib/public-path";
 import type { ExecutionSummary } from "./hybrid-progress";
 import type {
   LocalAgentBridge,
@@ -354,7 +355,7 @@ export function ConfirmationPanel({
       controller = new AbortController();
       issuanceAbort.current = controller;
       const response = await fetch(
-        `/api/executions/${encodeURIComponent(execution.id)}/confirmations`,
+        publicPath(`/api/executions/${encodeURIComponent(execution.id)}/confirmations`),
         {
           method: "POST",
           headers: { "content-type": "application/json" },

@@ -1,0 +1,158 @@
+stages:
+  - validate
+  - deploy
+
+default:
+  interruptible: true
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+validate_project:
+  stage: validate
+  image: node:24-bookworm-slim
+  services:
+    - name: postgres:16-alpine
+      alias: postgres
+  variables:
+    POSTGRES_DB: control_plane
+    POSTGRES_USER: control_plane
+    POSTGRES_PASSWORD: control_plane
+    DATABASE_URL: postgresql://control_plane:control_plane@postgres:5432/control_plane?schema=public
+    COREPACK_HOME: /tmp/corepack
+    NEXT_PUBLIC_BASE_PATH: /auto-ux
+  before_script:
+    - corepack enable
+    - corepack prepare pnpm@11.9.0 --activate
+    - pnpm install --frozen-lockfile
+  script:
+    - |
+      attempt=0
+      until pnpm --filter @app/db exec prisma migrate deploy --schema prisma/schema.prisma; do
+        attempt=$((attempt + 1))
+        if [ "$attempt" -ge 20 ]; then exit 1; fi
+        sleep 1
+      done
+    - pnpm --filter @app/db exec prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code
+    - pnpm build
+    - pnpm lint
+    - pnpm typecheck
+    - pnpm test:scripts
+    - pnpm --filter @app/contracts test
+    - pnpm --filter @app/execution-core test
+    - pnpm --filter @app/db exec vitest run src/execution-repository.test.ts
+    - pnpm --filter @app/agent-simulator test
+    - pnpm --filter @app/web test
+    - |
+      node - <<'NODE'
+      const fs = require("node:fs");
+      const manifest = JSON.parse(fs.readFileSync("monitor.yaml", "utf8"));
+      const checks = {
+        id: manifest.id === "auto-ux",
+        repository: manifest.repo === process.env.CI_PROJECT_PATH,
+        path: manifest.path === "/auto-ux/",
+        runtime: manifest.runtime?.type === "service",
+        health: manifest.runtime?.health_path === "/api/health",
+        production: manifest.production?.rollout === "auto-after-main",
+        persistence: manifest.runtime_data_dirs?.includes("data")
+      };
+      const failed = Object.entries(checks).filter(([, value]) => !value).map(([name]) => name);
+      if (failed.length) throw new Error(`invalid NX deployment contract: ${failed.join(", ")}`);
+      NODE
+
+.nx_deploy:
+  stage: deploy
+  image: python:3.12-alpine
+  interruptible: false
+  before_script:
+    - apk add --no-cache openssh-client
+    - install -d -m 0700 "$HOME/.ssh"
+    - |
+      package_project() {
+        python3 - "$1" <<'PY'
+      import json
+      import pathlib
+      import sys
+      import tarfile
+
+      root = pathlib.Path.cwd()
+      output = pathlib.Path(sys.argv[1]).resolve()
+      manifest = json.loads((root / "monitor.yaml").read_text(encoding="utf-8"))
+      excluded_parts = {".git", ".venv", "__pycache__", "logs", "node_modules", ".next"}
+      runtime_dirs = {
+          pathlib.PurePosixPath(value).as_posix().rstrip("/")
+          for value in manifest.get("runtime_data_dirs", [])
+      }
+      with tarfile.open(output, "w:gz", format=tarfile.PAX_FORMAT) as archive:
+          for path in sorted(root.rglob("*")):
+              if path.resolve() == output:
+                  continue
+              relative = pathlib.PurePosixPath(path.relative_to(root).as_posix())
+              value = relative.as_posix()
+              if any(part in excluded_parts for part in relative.parts):
+                  continue
+              if any(value == item or value.startswith(item + "/") for item in runtime_dirs):
+                  continue
+              if path.is_symlink():
+                  raise SystemExit(f"deployment package rejects symlink: {relative}")
+              if path.is_file():
+                  archive.add(path, arcname=value, recursive=False)
+      PY
+      }
+
+deploy_preview:
+  extends: .nx_deploy
+  resource_group: "$CI_PROJECT_PATH_SLUG-preview"
+  environment:
+    name: preview/$CI_PROJECT_PATH_SLUG
+    url: https://wowdata.guanghexinzhi.cn/_preview/auto-ux/
+  script:
+    - install -m 0600 "$PREVIEW_DEPLOY_KEY" "$HOME/.ssh/id_ed25519"
+    - printf '%s\n' "$PREVIEW_DEPLOY_HOST_KEY" > "$HOME/.ssh/known_hosts"
+    - chmod 0600 "$HOME/.ssh/known_hosts"
+    - package_project nx-project.tar.gz
+    - ssh -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$PREVIEW_DEPLOY_USER@$PREVIEW_DEPLOY_HOST" "preview auto-ux $CI_COMMIT_SHA $CI_MERGE_REQUEST_IID service" < nx-project.tar.gz
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $PREVIEW_DEPLOY_KEY != "" && $PREVIEW_DEPLOY_HOST != "" && $PREVIEW_DEPLOY_USER != "" && $PREVIEW_DEPLOY_HOST_KEY != ""'
+  needs: [validate_project]
+
+deploy_production:
+  extends: .nx_deploy
+  resource_group: "$CI_PROJECT_PATH_SLUG-production"
+  environment:
+    name: production
+    url: $WOWDATA_PRODUCTION_URL
+    deployment_tier: production
+  script:
+    - install -m 0600 "$PRODUCTION_DEPLOY_KEY" "$HOME/.ssh/id_ed25519"
+    - printf '%s\n' "$PRODUCTION_DEPLOY_HOST_KEY" > "$HOME/.ssh/known_hosts"
+    - chmod 0600 "$HOME/.ssh/known_hosts"
+    - package_project nx-project.tar.gz
+    - ssh -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$PRODUCTION_DEPLOY_USER@$PRODUCTION_DEPLOY_HOST" "deploy auto-ux $CI_COMMIT_SHA service" < nx-project.tar.gz
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $PRODUCTION_DEPLOY_ENABLED == "1"'
+  needs: [validate_project]
+
+rollback_production:
+  extends: .nx_deploy
+  resource_group: "$CI_PROJECT_PATH_SLUG-production"
+  environment:
+    name: production
+    url: $WOWDATA_PRODUCTION_URL
+    deployment_tier: production
+  script:
+    - install -m 0600 "$PRODUCTION_DEPLOY_KEY" "$HOME/.ssh/id_ed25519"
+    - printf '%s\n' "$PRODUCTION_DEPLOY_HOST_KEY" > "$HOME/.ssh/known_hosts"
+    - chmod 0600 "$HOME/.ssh/known_hosts"
+    - |
+      if [ -n "${ROLLBACK_SHA:-}" ] && ! printf '%s\n' "$ROLLBACK_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+        echo 'ROLLBACK_SHA must be a full lowercase 40-character Git SHA.' >&2
+        exit 2
+      fi
+    - ssh -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$PRODUCTION_DEPLOY_USER@$PRODUCTION_DEPLOY_HOST" "rollback auto-ux${ROLLBACK_SHA:+ $ROLLBACK_SHA}"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $PRODUCTION_DEPLOY_ENABLED == "1"'
+      when: manual
+      allow_failure: false

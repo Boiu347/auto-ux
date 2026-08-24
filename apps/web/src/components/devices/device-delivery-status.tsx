@@ -3,6 +3,8 @@
 import { MessageBar, MessageBarBody } from "@fluentui/react-components";
 import { useCallback, useEffect, useState } from "react";
 
+import { publicPath } from "../../lib/public-path";
+
 type Delivery = {
   status: "queued" | "claimed" | "codex_opened" | "waiting_permission" | "prompt_sent" | "failed";
   errorCode: string | null;
@@ -28,7 +30,7 @@ export function DeviceDeliveryStatus({ executionId }: { executionId: string }) {
   const [delivery, setDelivery] = useState<Delivery>();
   const refresh = useCallback(async () => {
     try {
-      const response = await fetch(`/api/paired-tasks/${encodeURIComponent(executionId)}`, { cache: "no-store" });
+      const response = await fetch(publicPath(`/api/paired-tasks/${encodeURIComponent(executionId)}`), { cache: "no-store" });
       if (response.ok) setDelivery(await response.json());
     } catch {
       // The execution event stream remains authoritative if delivery polling is unavailable.

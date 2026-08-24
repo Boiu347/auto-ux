@@ -12,6 +12,8 @@ import {
 } from "@fluentui/react-components";
 import { FormEvent, useState } from "react";
 
+import { publicPath } from "../../lib/public-path";
+
 export function DevelopmentSessionForm() {
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
@@ -25,7 +27,7 @@ export function DevelopmentSessionForm() {
     setError(undefined);
     const data = new FormData(event.currentTarget);
     try {
-      const response = await fetch("/api/dev/session", {
+      const response = await fetch(publicPath("/api/dev/session"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({

@@ -73,16 +73,19 @@ pnpm dev:down
 | `AUTO_UX_RUNTIME_DIR` | 运行时 PID、演示执行 ID 和日志目录 |
 | `AUTO_UX_LOCAL_CODEX_LAUNCH` | 本地设为 `1` 时允许服务器调用 Mac 的 `pbcopy`、`open` 和固定 AppleScript；生产环境始终忽略 |
 
-## Railway 雏形部署
+## NX Server 部署
 
-Railway 可以使用仓库根目录的标准命令：
+GitLab `main` 流水线验证通过后会自动发布到：
 
 ```text
-Build: pnpm build
-Start: pnpm start
+http://118.196.147.13/auto-ux/
 ```
 
-云端页面会显示真实任务表单并复制独立 Codex 提示词，但不会声称能够从 Railway 打开本地 Codex。本地模式已经具备执行令牌、任务页面和进度接口，也可以自动打开 Codex；当前 Skill 尚未接入自动进度上报，因此任务页面不会自动展示 Codex 的执行步骤。
+生产镜像同时运行 Next.js 和仅监听容器回环地址的 PostgreSQL。数据库文件保存在 NX 平台声明的 `data/` 持久化目录中，代码发布不会覆盖业务数据，也不需要单独配置 `DATABASE_URL`。容器停止时会对 PostgreSQL 执行快速、安全关闭。
+
+生产页面使用 Mac 配对令牌识别用户和工作区。每位同事应分别完成配对；服务端继续按 `userId + workspaceId` 隔离任务、确认和审计记录。公网入口本身不授予任务数据访问权限。
+
+仓库中的 `.gitlab-ci.yml`、`Dockerfile`、`docker-entrypoint.sh` 和 `monitor.yaml` 是部署合同的一部分。GitHub 与 GitLab 应保持在同一个提交，GitLab 负责执行部署。
 
 `.env.example` 只提供本地示例。不要把真实会话、原始文档或完整电话号码写入环境文件。
 

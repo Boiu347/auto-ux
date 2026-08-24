@@ -19,6 +19,7 @@ import {
 } from "@fluentui/react-components";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { publicPath } from "../../lib/public-path";
 import { ConfirmationPanel } from "./confirmation-panel";
 import { DeviceDeliveryStatus } from "../devices/device-delivery-status";
 import { CurrentActionCard } from "./current-action-card";
@@ -131,7 +132,7 @@ export function HybridProgress({
       }
       try {
         const response = await fetch(
-          `/api/executions/${encodeURIComponent(id)}`,
+          publicPath(`/api/executions/${encodeURIComponent(id)}`),
           {
             signal: controller.signal,
             headers: { accept: "application/json" }
@@ -210,7 +211,7 @@ export function HybridProgress({
         ? `?cursor=${encodeURIComponent(latestCursor.current)}`
         : "";
       source = new EventSource(
-        `/api/executions/${encodeURIComponent(id)}/events${query}`
+        publicPath(`/api/executions/${encodeURIComponent(id)}/events${query}`)
       );
       setConnection(latestCursor.current ? "reconnecting" : "connecting");
       source.onopen = () => setConnection("connected");
@@ -370,7 +371,7 @@ function RemoteConfirmationPanel({
   useEffect(() => {
     if (!waiting || !current) return;
     let disposed = false;
-    void fetch(`/api/executions/${encodeURIComponent(execution.id)}/decision?action=${current.action}`)
+    void fetch(publicPath(`/api/executions/${encodeURIComponent(execution.id)}/decision?action=${current.action}`))
       .then(async (response) => response.status === 204 ? null : response.json())
       .then((value: { decision?: string } | null) => {
         if (!disposed && value?.decision) {
@@ -387,7 +388,7 @@ function RemoteConfirmationPanel({
     if (!current || submitting) return;
     setSubmitting(true);
     try {
-      const response = await fetch(`/api/executions/${encodeURIComponent(execution.id)}/decision`, {
+      const response = await fetch(publicPath(`/api/executions/${encodeURIComponent(execution.id)}/decision`), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: current.action, decision })

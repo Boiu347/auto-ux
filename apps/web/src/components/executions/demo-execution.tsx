@@ -4,6 +4,8 @@ import { Button, Card, CardHeader, MessageBar, MessageBarBody, Text } from "@flu
 import Link from "next/link";
 import { useState } from "react";
 
+import { publicPath } from "../../lib/public-path";
+
 export function DemoExecution({
   bootstrap
 }: {
@@ -21,7 +23,7 @@ export function DemoExecution({
     setLoading(true);
     setError(undefined);
     try {
-      const session = await fetch("/api/dev/session", {
+      const session = await fetch(publicPath("/api/dev/session"), {
         method: "POST",
         headers: {
           "content-type": "application/json"
@@ -34,7 +36,7 @@ export function DemoExecution({
       if (!session.ok) {
         throw new Error("session unavailable");
       }
-      const response = await fetch("/api/dev/demo", { method: "POST" });
+      const response = await fetch(publicPath("/api/dev/demo"), { method: "POST" });
       const body = (await response.json()) as {
         execution?: { id?: unknown };
       };

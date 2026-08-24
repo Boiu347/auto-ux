@@ -1,0 +1,28 @@
+{
+  "id": "auto-ux",
+  "name": "百度云外呼机器人一键配置",
+  "category": "WEB APP",
+  "description": "通过 Codex 与本地 Mac 助手完成百度云外呼机器人的可追溯配置。",
+  "path": "/auto-ux/",
+  "owner": "曹红鹏",
+  "repo": "market/nx/nx-catalog/auto-ux",
+  "meta": ["百度云", "外呼机器人", "Codex"],
+  "auth": {"mode": "public", "project_id": "auto-ux"},
+  "runtime": {
+    "type": "service",
+    "health_path": "/api/health",
+    "cpu": 1,
+    "memory_mb": 1024
+  },
+  "refresh": {"enabled": false, "entrypoint": "", "schedule": ""},
+  "production": {"enabled": true, "rollout": "auto-after-main"},
+  "preview": {
+    "enabled": true,
+    "runtime": "service",
+    "path": "/_preview/auto-ux/",
+    "auth_project_id": "auto-ux-preview",
+    "data_mode": "isolated"
+  },
+  "secrets": [],
+  "runtime_data_dirs": ["data"]
+}

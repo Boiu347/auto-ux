@@ -11,6 +11,8 @@ import {
 } from "@fluentui/react-components";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { publicOrigin, publicPath } from "../../lib/public-path";
+
 type PairingState =
   | { status: "loading" | "unpaired" }
   | { status: "waiting"; code: string; expiresAt: string }
@@ -29,7 +31,7 @@ export function MacPairingPanel({
 
   const refresh = useCallback(async () => {
     try {
-      const response = await fetch("/api/pairings/current", { cache: "no-store" });
+      const response = await fetch(publicPath("/api/pairings/current"), { cache: "no-store" });
       if (!response.ok) throw new Error("无法读取 Mac 配对状态。");
       const value = (await response.json()) as {
         status: "unpaired" | "waiting_for_mac" | "paired" | "expired";
@@ -71,7 +73,7 @@ export function MacPairingPanel({
   const ready = pairing.status === "paired" && pairing.online;
   useEffect(() => onReadyChange(ready), [onReadyChange, ready]);
 
-  const baseUrl = origin ?? (typeof window === "undefined" ? "" : window.location.origin);
+  const baseUrl = origin ?? (typeof window === "undefined" ? "" : publicOrigin(window.location.origin));
   const installCommand = useMemo(() => {
     if (pairing.status !== "waiting") return "";
     return `curl -fsSL https://raw.githubusercontent.com/Boiu347/auto-ux/main/scripts/install-mac-agent.sh | bash -s -- '${baseUrl}' '${pairing.code}'`;
@@ -80,7 +82,7 @@ export function MacPairingPanel({
   const createPairing = async () => {
     setPairing({ status: "loading" });
     try {
-      const response = await fetch("/api/pairings", { method: "POST" });
+      const response = await fetch(publicPath("/api/pairings"), { method: "POST" });
       const value = (await response.json().catch(() => ({}))) as {
         code?: string;
         expiresAt?: string;

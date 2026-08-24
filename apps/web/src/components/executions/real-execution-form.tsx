@@ -15,6 +15,8 @@ import {
 import Link from "next/link";
 import { FormEvent, useState } from "react";
 
+import { publicOrigin, publicPath } from "../../lib/public-path";
+
 import {
   buildCodexPrompt,
   buildStandaloneCodexPrompt
@@ -53,7 +55,7 @@ export function RealExecutionForm({
 
   const launch = async (task: CreatedTask) => {
     setState("launching");
-    const response = await fetch("/api/local/launch", {
+    const response = await fetch(publicPath("/api/local/launch"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ prompt: task.prompt })
@@ -84,7 +86,7 @@ export function RealExecutionForm({
       const requirements = String(data.get("requirements") ?? "");
       const phoneFilePath = String(data.get("phoneFilePath") ?? "");
       const robotName = String(data.get("robotName") ?? "");
-      const baseUrl = apiBaseUrl ?? window.location.origin;
+      const baseUrl = apiBaseUrl ?? publicOrigin(window.location.origin);
 
       if (cloudPairingEnabled || pairedDeviceReady) {
         buildStandaloneCodexPrompt({
@@ -97,7 +99,7 @@ export function RealExecutionForm({
           throw new Error("请先配对并保持 Mac 助手在线。");
         }
         setState("creating");
-        const response = await fetch("/api/paired-tasks", {
+        const response = await fetch(publicPath("/api/paired-tasks"), {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -146,7 +148,7 @@ export function RealExecutionForm({
       }
 
       setState("creating");
-      const session = await fetch("/api/dev/session", {
+      const session = await fetch(publicPath("/api/dev/session"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(bootstrap)
@@ -160,7 +162,7 @@ export function RealExecutionForm({
         phoneFilePath,
         robotName
       });
-      const executionResponse = await fetch("/api/executions", {
+      const executionResponse = await fetch(publicPath("/api/executions"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
