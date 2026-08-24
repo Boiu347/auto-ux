@@ -1,0 +1,5 @@
+.git
+.gitlab-ci.yml
+__pycache__/
+tests/
+README.md
