@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS builder
+FROM node:22-slim AS builder
 
 ENV COREPACK_HOME=/corepack
 ENV DATABASE_URL=postgresql://auto_ux@127.0.0.1:5432/auto_ux
@@ -15,7 +15,7 @@ RUN apt-get update \
   && pnpm install --frozen-lockfile \
   && pnpm build
 
-FROM node:24-bookworm-slim AS runtime
+FROM node:22-slim AS runtime
 
 ENV COREPACK_HOME=/corepack
 ENV DATABASE_URL=postgresql://auto_ux@127.0.0.1:5432/auto_ux
