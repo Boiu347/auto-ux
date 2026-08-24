@@ -7,7 +7,10 @@ ENV NEXT_PUBLIC_BASE_PATH=/auto-ux
 
 WORKDIR /app
 COPY . .
-RUN corepack enable \
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl \
+  && rm -rf /var/lib/apt/lists/* \
+  && corepack enable \
   && corepack prepare pnpm@11.9.0 --activate \
   && pnpm install --frozen-lockfile \
   && pnpm build
@@ -23,7 +26,7 @@ ENV PORT=8080
 ENV PATH=/usr/lib/postgresql/15/bin:$PATH
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl gosu postgresql-15 postgresql-client-15 tini \
+  && apt-get install -y --no-install-recommends curl gosu openssl postgresql-15 postgresql-client-15 tini \
   && rm -rf /var/lib/apt/lists/* \
   && corepack enable \
   && corepack prepare pnpm@11.9.0 --activate
