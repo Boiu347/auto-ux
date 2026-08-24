@@ -32,6 +32,7 @@ validate_project:
           "id": manifest.get("id") == "auto-ux",
           "repository": manifest.get("repo") == os.environ["CI_PROJECT_PATH"],
           "production path": manifest.get("path") == "/auto-ux/",
+          "temporary production auth": manifest.get("auth", {}).get("mode") == "public",
           "runtime": runtime == "service",
           "preview runtime": preview.get("runtime") == runtime,
           "preview path": preview.get("path") == "/_preview/auto-ux/",
