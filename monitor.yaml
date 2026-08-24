@@ -7,7 +7,7 @@
   "owner": "曹红鹏",
   "repo": "market/nx/nx-catalog/auto-ux",
   "meta": ["自动化调研", "项目进度", "Web 服务"],
-  "auth": {"mode": "login", "project_id": "auto-ux"},
+  "auth": {"mode": "public", "project_id": "auto-ux"},
   "runtime": {
     "type": "service",
     "health_path": "/health",

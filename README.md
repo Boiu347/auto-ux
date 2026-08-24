@@ -20,6 +20,6 @@ python3 -m unittest discover -s tests
 - Merge Request pipeline 自动发布固定 Preview。
 - 合并到 `main` 后自动发布 Production。
 - Preview：`https://wowdata.guanghexinzhi.cn/_preview/auto-ux/`
-- Production：`https://wowdata.guanghexinzhi.cn/auto-ux/`
+- Production：`http://118.196.147.13/auto-ux/`（申请正式域名前的临时 IP 入口）
 
 部署密钥由 NX 平台按项目绑定，禁止写入仓库。
