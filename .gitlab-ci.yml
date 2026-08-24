@@ -24,7 +24,7 @@ validate_project:
     COREPACK_HOME: /tmp/corepack
   before_script:
     - corepack enable
-    - corepack prepare pnpm@11.9.0 --activate
+    - corepack prepare pnpm@10.30.0 --activate
     - pnpm install --frozen-lockfile
   script:
     - |

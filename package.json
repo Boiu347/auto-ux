@@ -2,7 +2,7 @@
   "name": "baidu-one-click-config",
   "version": "0.1.0",
   "private": true,
-  "packageManager": "pnpm@11.9.0",
+  "packageManager": "pnpm@10.30.0",
   "scripts": {
     "agent:simulate": "pnpm --filter @app/contracts build && pnpm --filter @app/agent-simulator simulate",
     "dev:down": "./scripts/dev-down.sh",

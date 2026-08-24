@@ -1,4 +1,4 @@
-FROM node:22-slim AS builder
+FROM python:3.12-slim AS builder
 
 ENV COREPACK_HOME=/corepack
 ENV DATABASE_URL=postgresql://auto_ux@127.0.0.1:5432/auto_ux
@@ -8,14 +8,15 @@ ENV NEXT_PUBLIC_BASE_PATH=/auto-ux
 WORKDIR /app
 COPY . .
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssl \
+  && apt-get install -y --no-install-recommends node-corepack nodejs openssl \
   && rm -rf /var/lib/apt/lists/* \
-  && corepack enable \
-  && corepack prepare pnpm@11.9.0 --activate \
+  && corepack prepare pnpm@10.30.0 --activate \
+  && chmod 0755 /corepack/pnpm/10.30.0/bin/pnpm.cjs \
+  && ln -sf /corepack/pnpm/10.30.0/bin/pnpm.cjs /usr/local/bin/pnpm \
   && pnpm install --frozen-lockfile \
   && pnpm build
 
-FROM node:22-slim AS runtime
+FROM python:3.12-slim AS runtime
 
 ENV COREPACK_HOME=/corepack
 ENV DATABASE_URL=postgresql://auto_ux@127.0.0.1:5432/auto_ux
@@ -23,13 +24,16 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV NEXT_PUBLIC_BASE_PATH=/auto-ux
 ENV NODE_ENV=production
 ENV PORT=8080
-ENV PATH=/usr/lib/postgresql/15/bin:$PATH
+ENV PATH=/usr/lib/postgresql/17/bin:$PATH
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl gosu openssl postgresql-15 postgresql-client-15 tini \
+  && apt-get install -y --no-install-recommends curl gosu node-corepack nodejs openssl postgresql postgresql-client tini \
   && rm -rf /var/lib/apt/lists/* \
-  && corepack enable \
-  && corepack prepare pnpm@11.9.0 --activate
+  && corepack prepare pnpm@10.30.0 --activate \
+  && chmod 0755 /corepack/pnpm/10.30.0/bin/pnpm.cjs \
+  && ln -sf /corepack/pnpm/10.30.0/bin/pnpm.cjs /usr/local/bin/pnpm \
+  && groupadd --gid 1000 node \
+  && useradd --uid 1000 --gid node --shell /bin/sh --create-home node
 
 WORKDIR /app
 COPY --from=builder --chown=node:node /app /app
