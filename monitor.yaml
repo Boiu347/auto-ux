@@ -3,7 +3,7 @@
   "name": "自动化调研进度网站",
   "category": "WEB APP",
   "description": "用于展示自动化调研项目的进度与状态。",
-  "path": "/",
+  "path": "/auto-ux/",
   "owner": "曹红鹏",
   "repo": "market/nx/nx-catalog/auto-ux",
   "meta": ["自动化调研", "项目进度", "Web 服务"],
