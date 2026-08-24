@@ -1,0 +1,28 @@
+{
+  "id": "auto-ux",
+  "name": "自动化调研进度网站",
+  "category": "WEB APP",
+  "description": "用于展示自动化调研项目的进度与状态。",
+  "path": "/",
+  "owner": "曹红鹏",
+  "repo": "market/nx/nx-catalog/auto-ux",
+  "meta": ["自动化调研", "项目进度", "Web 服务"],
+  "auth": {"mode": "login", "project_id": "auto-ux"},
+  "runtime": {
+    "type": "service",
+    "health_path": "/health",
+    "cpu": 0.25,
+    "memory_mb": 128
+  },
+  "refresh": {"enabled": false, "entrypoint": "scripts/refresh.sh", "schedule": ""},
+  "production": {"enabled": true, "rollout": "auto-after-main"},
+  "preview": {
+    "enabled": true,
+    "runtime": "service",
+    "path": "/_preview/auto-ux/",
+    "auth_project_id": "auto-ux-preview",
+    "data_mode": "snapshot"
+  },
+  "secrets": [],
+  "runtime_data_dirs": ["data"]
+}
