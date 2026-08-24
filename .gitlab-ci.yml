@@ -22,7 +22,6 @@ validate_project:
     POSTGRES_PASSWORD: control_plane
     DATABASE_URL: postgresql://control_plane:control_plane@postgres:5432/control_plane?schema=public
     COREPACK_HOME: /tmp/corepack
-    NEXT_PUBLIC_BASE_PATH: /auto-ux
   before_script:
     - corepack enable
     - corepack prepare pnpm@11.9.0 --activate
@@ -36,7 +35,7 @@ validate_project:
         sleep 1
       done
     - pnpm --filter @app/db exec prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code
-    - pnpm build
+    - NEXT_PUBLIC_BASE_PATH=/auto-ux pnpm build
     - pnpm lint
     - pnpm typecheck
     - ./tests/integration/process-ownership.test.sh
