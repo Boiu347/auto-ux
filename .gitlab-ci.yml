@@ -31,7 +31,7 @@ validate_project:
       checks = {
           "id": manifest.get("id") == "auto-ux",
           "repository": manifest.get("repo") == os.environ["CI_PROJECT_PATH"],
-          "production path": manifest.get("path") == "/",
+          "production path": manifest.get("path") == "/auto-ux/",
           "runtime": runtime == "service",
           "preview runtime": preview.get("runtime") == runtime,
           "preview path": preview.get("path") == "/_preview/auto-ux/",
@@ -45,7 +45,7 @@ validate_project:
       failed = [name for name, passed in checks.items() if not passed]
       if failed:
           raise SystemExit("invalid NX deployment contract: " + ", ".join(failed))
-      print("validated standalone Web auto-ux (service)")
+      print("validated domainless Web auto-ux (service)")
       PY
 
 .nx_deploy:
