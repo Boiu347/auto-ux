@@ -110,4 +110,6 @@ test("installer installs both the Mac helper and the Codex skill", async () => {
   assert.match(installer, /\.codex\/skills\/baidu-cloud-one-click-config/);
   assert.match(installer, /SOURCE_ARCHIVE_URL/);
   assert.match(installer, /118\\\.196\\\.147\\\.13/);
+  assert.match(installer, /API_BASE_URL%\/.*downloads/);
+  assert.doesNotMatch(installer, /github\.com|githubusercontent\.com/);
 });

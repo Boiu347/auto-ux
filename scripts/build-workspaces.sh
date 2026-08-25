@@ -17,4 +17,5 @@ cd "$PROJECT_ROOT/apps/agent-simulator"
 ./node_modules/.bin/tsc --noEmit
 
 cd "$PROJECT_ROOT/apps/web"
+"$PROJECT_ROOT/scripts/prepare-mac-agent-assets.sh"
 ./node_modules/.bin/next build

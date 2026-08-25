@@ -21,8 +21,9 @@ describe("MacPairingPanel", () => {
 
     expect(await screen.findByText("A1B2C3D4")).toBeInTheDocument();
     expect(screen.getByText(/install-mac-agent\.sh/)).toHaveTextContent(
-      "https://auto-ux.example"
+      "https://auto-ux.example/downloads/install-mac-agent.sh"
     );
+    expect(screen.getByText(/install-mac-agent\.sh/)).not.toHaveTextContent("githubusercontent");
   });
 
   it("reports a paired online Mac to the task form", async () => {

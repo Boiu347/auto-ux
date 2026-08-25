@@ -76,7 +76,7 @@ export function MacPairingPanel({
   const baseUrl = origin ?? (typeof window === "undefined" ? "" : publicOrigin(window.location.origin));
   const installCommand = useMemo(() => {
     if (pairing.status !== "waiting") return "";
-    return `curl -fsSL https://raw.githubusercontent.com/Boiu347/auto-ux/main/scripts/install-mac-agent.sh | bash -s -- '${baseUrl}' '${pairing.code}'`;
+    return `curl -fsSL '${baseUrl}/downloads/install-mac-agent.sh' | bash -s -- '${baseUrl}' '${pairing.code}'`;
   }, [baseUrl, pairing]);
 
   const createPairing = async () => {

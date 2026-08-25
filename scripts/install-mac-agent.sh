@@ -3,8 +3,9 @@ set -euo pipefail
 
 API_BASE_URL=${1:-}
 PAIRING_CODE=${2:-}
-AGENT_SOURCE_URL="https://raw.githubusercontent.com/Boiu347/auto-ux/main/scripts/mac-agent.mjs"
-SOURCE_ARCHIVE_URL="https://codeload.github.com/Boiu347/auto-ux/tar.gz/refs/heads/main"
+ASSET_BASE_URL="${API_BASE_URL%/}/downloads"
+AGENT_SOURCE_URL="$ASSET_BASE_URL/mac-agent.mjs"
+SOURCE_ARCHIVE_URL="$ASSET_BASE_URL/baidu-cloud-one-click-config.tar.gz"
 INSTALL_DIR="$HOME/Library/Application Support/AutoUX"
 AGENT_PATH="$INSTALL_DIR/mac-agent.mjs"
 LOG_DIR="$HOME/Library/Logs/AutoUX"
@@ -36,16 +37,32 @@ if (( NODE_MAJOR < 20 )); then
   exit 1
 fi
 
+download_file() {
+  local source_url=$1
+  local destination=$2
+  curl --fail --silent --show-error --location \
+    --retry 4 --retry-delay 2 --connect-timeout 10 --max-time 120 \
+    "$source_url" -o "$destination"
+}
+
 mkdir -p "$INSTALL_DIR" "$LOG_DIR" "$(dirname "$PLIST_PATH")"
 TEMP_AGENT="$AGENT_PATH.download"
-curl -fsSL "$AGENT_SOURCE_URL" -o "$TEMP_AGENT"
+if ! download_file "$AGENT_SOURCE_URL" "$TEMP_AGENT"; then
+  echo "Mac 助手下载失败，请检查生产站点连接后重试。" >&2
+  exit 1
+fi
 chmod 700 "$TEMP_AGENT"
 mv "$TEMP_AGENT" "$AGENT_PATH"
 
 TEMP_SOURCE=$(mktemp -d "${TMPDIR:-/tmp}/auto-ux-skill.XXXXXX")
 trap 'rm -rf "$TEMP_SOURCE"' EXIT
-curl -fsSL "$SOURCE_ARCHIVE_URL" | tar -xz -C "$TEMP_SOURCE"
-SKILL_SOURCE="$TEMP_SOURCE/auto-ux-main/skills/baidu-cloud-one-click-config"
+SOURCE_ARCHIVE="$TEMP_SOURCE/baidu-cloud-one-click-config.tar.gz"
+if ! download_file "$SOURCE_ARCHIVE_URL" "$SOURCE_ARCHIVE"; then
+  echo "百度云一键配置 Skill 下载失败，请检查生产站点连接后重试。" >&2
+  exit 1
+fi
+tar -xzf "$SOURCE_ARCHIVE" -C "$TEMP_SOURCE"
+SKILL_SOURCE="$TEMP_SOURCE/baidu-cloud-one-click-config"
 SKILL_DIR="$HOME/.codex/skills/baidu-cloud-one-click-config"
 if [[ ! -f "$SKILL_SOURCE/SKILL.md" ]]; then
   echo "下载的 Skill 不完整。" >&2
