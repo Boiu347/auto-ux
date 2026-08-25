@@ -72,7 +72,8 @@ mkdir -p "$SKILL_DIR"
 cp -R "$SKILL_SOURCE/." "$SKILL_DIR/"
 chmod 700 "$SKILL_DIR/scripts/"*.py
 
-"$NODE_PATH" "$AGENT_PATH" pair "$API_BASE_URL" "${PAIRING_CODE^^}"
+PAIRING_CODE_UPPER=$(printf '%s' "$PAIRING_CODE" | tr '[:lower:]' '[:upper:]')
+"$NODE_PATH" "$AGENT_PATH" pair "$API_BASE_URL" "$PAIRING_CODE_UPPER"
 
 xml_escape() {
   printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
