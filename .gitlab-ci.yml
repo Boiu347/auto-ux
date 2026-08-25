@@ -122,6 +122,8 @@ deploy_preview:
     - ssh -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$PREVIEW_DEPLOY_USER@$PREVIEW_DEPLOY_HOST" "preview auto-ux $CI_COMMIT_SHA $CI_MERGE_REQUEST_IID service" < nx-project.tar.gz
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $PREVIEW_DEPLOY_KEY != "" && $PREVIEW_DEPLOY_HOST != "" && $PREVIEW_DEPLOY_USER != "" && $PREVIEW_DEPLOY_HOST_KEY != ""'
+      when: manual
+      allow_failure: true
   needs: [validate_project, validate_python]
 
 deploy_production:
