@@ -1,4 +1,4 @@
-FROM node:22-slim AS builder
+FROM public.ecr.aws/docker/library/node:22-slim AS builder
 
 ENV COREPACK_HOME=/corepack
 ENV DATABASE_URL=postgresql://auto_ux@127.0.0.1:5432/auto_ux
@@ -15,7 +15,7 @@ RUN apt-get update \
   && pnpm install --frozen-lockfile \
   && pnpm build
 
-FROM node:22-slim AS runtime
+FROM public.ecr.aws/docker/library/node:22-slim AS runtime
 
 ENV COREPACK_HOME=/corepack
 ENV DATABASE_URL=postgresql://auto_ux@127.0.0.1:5432/auto_ux
