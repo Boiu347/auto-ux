@@ -122,20 +122,51 @@ deploy_preview:
     - ssh -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$PREVIEW_DEPLOY_USER@$PREVIEW_DEPLOY_HOST" "preview auto-ux $CI_COMMIT_SHA $CI_MERGE_REQUEST_IID service" < nx-project.tar.gz
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $PREVIEW_DEPLOY_KEY != "" && $PREVIEW_DEPLOY_HOST != "" && $PREVIEW_DEPLOY_USER != "" && $PREVIEW_DEPLOY_HOST_KEY != ""'
+      when: manual
+      allow_failure: true
   needs: [validate_project, validate_python]
 
 deploy_production:
-  extends: .nx_deploy
+  stage: deploy
+  image:
+    name: moby/buildkit:rootless
+    entrypoint: [""]
+  interruptible: false
   resource_group: "$CI_PROJECT_PATH_SLUG-production"
   environment:
     name: production
     url: $WOWDATA_PRODUCTION_URL
     deployment_tier: production
   script:
+    - command -v ssh
+    - command -v tar
+    - command -v gzip
+    - install -d -m 0700 "$HOME/.ssh"
     - install -m 0600 "$PRODUCTION_DEPLOY_KEY" "$HOME/.ssh/id_ed25519"
     - printf '%s\n' "$PRODUCTION_DEPLOY_HOST_KEY" > "$HOME/.ssh/known_hosts"
     - chmod 0600 "$HOME/.ssh/known_hosts"
-    - package_project nx-project.tar.gz
+    - >-
+      BUILDKITD_FLAGS=--oci-worker-no-process-sandbox
+      buildctl-daemonless.sh build
+      --frontend dockerfile.v0
+      --local context="$CI_PROJECT_DIR"
+      --local dockerfile="$CI_PROJECT_DIR"
+      --opt build-arg:GIT_COMMIT=$CI_COMMIT_SHA
+      --output type=docker,name="wowdata-production:auto-ux-${CI_COMMIT_SHA}",dest="$CI_PROJECT_DIR/runtime.tar"
+    - gzip -1 runtime.tar
+    - test -s runtime.tar.gz
+    - >-
+      tar -czf nx-project.tar.gz
+      --exclude='./.git'
+      --exclude='./.venv'
+      --exclude='./__pycache__'
+      --exclude='./logs'
+      --exclude='./node_modules'
+      --exclude='./.next'
+      --exclude='./data'
+      --exclude='./nx-project.tar.gz'
+      .
+    - tar -tzf nx-project.tar.gz >/dev/null
     - ssh -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$PRODUCTION_DEPLOY_USER@$PRODUCTION_DEPLOY_HOST" "deploy auto-ux $CI_COMMIT_SHA service" < nx-project.tar.gz
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $PRODUCTION_DEPLOY_ENABLED == "1"'

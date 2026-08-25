@@ -15,7 +15,11 @@
     "memory_mb": 1024
   },
   "refresh": {"enabled": false, "entrypoint": "scripts/refresh.sh", "schedule": ""},
-  "production": {"enabled": true, "rollout": "auto-after-main"},
+  "production": {
+    "enabled": true,
+    "rollout": "auto-after-main",
+    "image_archive": true
+  },
   "preview": {
     "enabled": true,
     "runtime": "service",
