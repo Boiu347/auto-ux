@@ -115,3 +115,9 @@ test("installer installs both the Mac helper and the Codex skill", async () => {
   assert.doesNotMatch(installer, /\$\{PAIRING_CODE\^\^\}/);
   assert.match(installer, /tr '\[:lower:\]' '\[:upper:\]'/);
 });
+
+test("Mac delivery waits for Codex focus and the new-task composer", async () => {
+  const source = await readFile(new URL("./mac-agent.mjs", import.meta.url), "utf8");
+  assert.match(source, /frontmost of process "Codex"/);
+  assert.match(source, /keystroke "n" using \{command down\}[\s\S]*delay 1\.5[\s\S]*keystroke "v"/);
+});

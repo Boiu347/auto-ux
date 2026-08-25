@@ -7,18 +7,22 @@ import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 const POLL_INTERVAL_MS = 3_000;
 const PERMISSION_RETRY_MS = 5_000;
 const DEFAULT_CONFIG_PATH = join(homedir(), ".config", "auto-ux", "agent.json");
 const PASTE_AND_SEND_SCRIPT = [
   'tell application "Codex" to activate',
-  "delay 0.8",
   'tell application "System Events"',
+  "  repeat with focusAttempt from 1 to 20",
+  '    if exists process "Codex" and frontmost of process "Codex" then exit repeat',
+  "    delay 0.1",
+  "  end repeat",
+  '  if not (exists process "Codex") or not (frontmost of process "Codex") then error "Codex did not become frontmost"',
   '  keystroke "n" using {command down}',
-  "  delay 0.5",
+  "  delay 1.5",
   '  keystroke "v" using {command down}',
-  "  delay 0.2",
+  "  delay 0.5",
   "  key code 36",
   "end tell"
 ].join("\n");
