@@ -1,15 +1,9 @@
 #!/bin/sh
 set -eu
 
-POSTGRES_DATA_DIR=${AUTO_UX_POSTGRES_DATA_DIR:-/app/data/postgres}
-POSTGRES_SOCKET_DIR=${AUTO_UX_POSTGRES_SOCKET_DIR:-/app/data/postgres-socket}
+POSTGRES_DATA_DIR=${AUTO_UX_POSTGRES_DATA_DIR:-/data/postgres}
+POSTGRES_SOCKET_DIR=${AUTO_UX_POSTGRES_SOCKET_DIR:-/data/postgres-socket}
 WEB_PID=""
-
-if [ "$(id -u)" -eq 0 ]; then
-  mkdir -p /app/data
-  chown -R node:node /app/data
-  exec gosu node "$0" "$@"
-fi
 
 mkdir -p "$POSTGRES_DATA_DIR" "$POSTGRES_SOCKET_DIR"
 chmod 0700 "$POSTGRES_DATA_DIR"
