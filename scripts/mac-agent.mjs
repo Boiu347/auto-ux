@@ -224,12 +224,19 @@ async function writeConfig(path, config) {
   await chmod(path, 0o600);
 }
 
-function normalizeBaseUrl(value) {
+export function normalizeBaseUrl(value) {
   const url = new URL(value);
-  if (url.protocol !== "https:" && url.hostname !== "localhost") {
+  const insecureHostAllowed = ["118.196.147.13", "localhost", "127.0.0.1"].includes(
+    url.hostname
+  );
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && insecureHostAllowed)) {
     throw new Error("HTTPS_REQUIRED");
   }
-  return url.origin;
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error("INVALID_BASE_URL");
+  }
+  const path = url.pathname.replace(/\/+$/, "");
+  return `${url.origin}${path}`;
 }
 
 function stableAgentId() {

@@ -15,8 +15,9 @@ if [[ $(uname -s) != "Darwin" ]]; then
   echo "当前安装器只支持 macOS。" >&2
   exit 1
 fi
-if [[ ! $API_BASE_URL =~ ^https://[^[:space:]]+$ ]]; then
-  echo "缺少有效的 HTTPS 网站地址。" >&2
+if [[ ! $API_BASE_URL =~ ^https://[^[:space:]]+$ ]] \
+  && [[ ! $API_BASE_URL =~ ^http://(118\.196\.147\.13|localhost|127\.0\.0\.1)(:[0-9]+)?(/[^[:space:]]*)?$ ]]; then
+  echo "缺少有效的网站地址；HTTP 仅允许当前生产 IP 或本机地址。" >&2
   exit 1
 fi
 if [[ ! $PAIRING_CODE =~ ^[A-Fa-f0-9]{8}$ ]]; then

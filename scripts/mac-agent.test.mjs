@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 
-import { deliverTask, pollOnce } from "./mac-agent.mjs";
+import { deliverTask, normalizeBaseUrl, pollOnce } from "./mac-agent.mjs";
 
 const task = {
   id: "Task_1",
@@ -90,8 +90,24 @@ test("pollOnce treats an empty queue as healthy idle state", async () => {
   );
 });
 
+test("normalizeBaseUrl preserves the production base path", () => {
+  assert.equal(
+    normalizeBaseUrl("http://118.196.147.13/auto-ux/"),
+    "http://118.196.147.13/auto-ux"
+  );
+  assert.equal(
+    normalizeBaseUrl("https://auto-ux.example/auto-ux/"),
+    "https://auto-ux.example/auto-ux"
+  );
+});
+
+test("normalizeBaseUrl rejects unapproved plaintext hosts", () => {
+  assert.throws(() => normalizeBaseUrl("http://auto-ux.example/auto-ux"), /HTTPS_REQUIRED/);
+});
+
 test("installer installs both the Mac helper and the Codex skill", async () => {
   const installer = await readFile(new URL("./install-mac-agent.sh", import.meta.url), "utf8");
   assert.match(installer, /\.codex\/skills\/baidu-cloud-one-click-config/);
   assert.match(installer, /SOURCE_ARCHIVE_URL/);
+  assert.match(installer, /118\\\.196\\\.147\\\.13/);
 });
