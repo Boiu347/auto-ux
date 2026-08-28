@@ -72,6 +72,7 @@ pnpm dev:down
 | `DEV_SESSION_SECRET` | 本地 HttpOnly 会话签名密钥，至少 32 字符 |
 | `AUTO_UX_RUNTIME_DIR` | 运行时 PID、演示执行 ID 和日志目录 |
 | `AUTO_UX_LOCAL_CODEX_LAUNCH` | 本地设为 `1` 时允许服务器调用 Mac 的 `pbcopy`、`open` 和固定 AppleScript；生产环境始终忽略 |
+| `AUTO_UX_PUBLIC_BASE_URL` | Codex 网站回报使用的完整外部地址；反向代理部署必须包含公开路径，例如 `http://118.196.147.13/auto-ux` |
 
 ## NX Server 部署
 

@@ -1,9 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createPairedTaskHandler } from "./route";
 
 describe("paired task API", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("creates a real execution and queues its bounded Codex prompt", async () => {
+    vi.stubEnv("AUTO_UX_PUBLIC_BASE_URL", "https://auto-ux.example/auto-ux/");
+    vi.stubEnv("NEXT_PUBLIC_BASE_PATH", "/auto-ux");
     const getBrowserScope = vi.fn().mockResolvedValue({
       pairingId: "Pairing_1",
       userId: "User_1",
@@ -24,7 +30,7 @@ describe("paired task API", () => {
       enqueueTask
     });
     const response = await handler(
-      new Request("https://auto-ux.example/api/paired-tasks", {
+      new Request("http://0.0.0.0:8080/auto-ux/api/paired-tasks", {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -60,6 +66,10 @@ describe("paired task API", () => {
       })
     );
     const queuedPrompt = enqueueTask.mock.calls[0]?.[1]?.prompt as string;
+    expect(queuedPrompt).toContain(
+      "apiBaseUrl: https://auto-ux.example/auto-ux"
+    );
+    expect(queuedPrompt).not.toContain("0.0.0.0:8080");
     expect(queuedPrompt).toContain("__AUTO_UX_EXECUTION_TOKEN__");
     expect(queuedPrompt).not.toContain("execution_token:");
     expect(JSON.stringify(payload)).not.toContain("execution_token:");
@@ -79,5 +89,72 @@ describe("paired task API", () => {
       })
     );
     expect(response.status).toBe(401);
+  });
+
+  it("rejects a bind-only API base URL before creating an execution", async () => {
+    const createExecution = vi.fn();
+    const handler = createPairedTaskHandler({
+      getBrowserScope: vi.fn().mockResolvedValue({
+        pairingId: "Pairing_1",
+        userId: "User_1",
+        workspaceId: "Workspace_1",
+        agentId: "MacAgent_1"
+      }),
+      createExecution,
+      enqueueTask: vi.fn()
+    });
+    const response = await handler(
+      new Request("http://0.0.0.0:8080/auto-ux/api/paired-tasks", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: `paired_browser=browser_token:${"b".repeat(64)}`
+        },
+        body: JSON.stringify({
+          requestId: "request_1234567890abcdef",
+          feishuUrls: ["https://guanghe.feishu.cn/docx/ABC123"],
+          requirements: "创建一个新的回访机器人",
+          phoneFilePath: "/Users/demo/phones.xlsx"
+        })
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      code: "AUTO_UX_PUBLIC_BASE_URL_INVALID"
+    });
+    expect(createExecution).not.toHaveBeenCalled();
+  });
+
+  it("rejects a configured public URL that omits the public base path", async () => {
+    vi.stubEnv("AUTO_UX_PUBLIC_BASE_URL", "https://auto-ux.example");
+    vi.stubEnv("NEXT_PUBLIC_BASE_PATH", "/auto-ux");
+    const createExecution = vi.fn();
+    const handler = createPairedTaskHandler({
+      getBrowserScope: vi.fn(),
+      createExecution,
+      enqueueTask: vi.fn()
+    });
+    const response = await handler(
+      new Request("http://0.0.0.0:8080/auto-ux/api/paired-tasks", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: `paired_browser=browser_token:${"b".repeat(64)}`
+        },
+        body: JSON.stringify({
+          requestId: "request_1234567890abcdef",
+          feishuUrls: ["https://guanghe.feishu.cn/docx/ABC123"],
+          requirements: "创建一个新的回访机器人",
+          phoneFilePath: "/Users/demo/phones.xlsx"
+        })
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      code: "AUTO_UX_PUBLIC_BASE_URL_INVALID"
+    });
+    expect(createExecution).not.toHaveBeenCalled();
   });
 });

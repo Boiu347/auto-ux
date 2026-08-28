@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { buildCodexPrompt } from "../../../components/executions/build-codex-prompt";
+import { publicOrigin } from "../../../lib/public-path";
 import type { CurrentUser } from "../../../server/auth/current-user";
 import { ExecutionTokenPlaceholder, type DeviceService, type DeviceTaskRecord } from "../../../server/devices/device-service";
 import { readPairedBrowserToken } from "../../../server/devices/device-http";
@@ -31,6 +32,35 @@ type Dependencies = {
   ): Promise<Pick<DeviceTaskRecord, "id" | "status">>;
 };
 
+export function resolvePublicApiBaseUrl(requestUrl: string): string {
+  const configured = process.env.AUTO_UX_PUBLIC_BASE_URL?.trim();
+  const value = configured || publicOrigin(new URL(requestUrl).origin);
+  const normalized = value.replace(/\/+$/, "");
+  let url: URL;
+  try {
+    url = new URL(normalized);
+  } catch {
+    throw new Error("AUTO_UX_PUBLIC_BASE_URL_INVALID");
+  }
+  const configuredBasePath = process.env.NEXT_PUBLIC_BASE_PATH?.trim();
+  const expectedBasePath = configuredBasePath
+    ? `/${configuredBasePath.replace(/^\/+|\/+$/g, "")}`
+    : "";
+  const actualPath = url.pathname.replace(/\/+$/, "");
+  if (
+    !["http:", "https:"].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    ["0.0.0.0", "::", "[::]"].includes(url.hostname) ||
+    (expectedBasePath && !actualPath.endsWith(expectedBasePath))
+  ) {
+    throw new Error("AUTO_UX_PUBLIC_BASE_URL_INVALID");
+  }
+  return normalized;
+}
+
 export function createPairedTaskHandler(dependencies: Dependencies) {
   return async function POST(request: Request): Promise<Response> {
     const browserToken = readPairedBrowserToken(request);
@@ -39,6 +69,7 @@ export function createPairedTaskHandler(dependencies: Dependencies) {
     }
     try {
       const input = TaskInputSchema.parse(await request.json());
+      const apiBaseUrl = resolvePublicApiBaseUrl(request.url);
       const paired = await dependencies.getBrowserScope(browserToken);
       const scope = { userId: paired.userId, workspaceId: paired.workspaceId };
       const inputHash = `sha256:${createHash("sha256")
@@ -59,7 +90,7 @@ export function createPairedTaskHandler(dependencies: Dependencies) {
         prompt: buildCodexPrompt({
           executionId,
           agentToken: created.agentToken,
-          apiBaseUrl: new URL(request.url).origin,
+          apiBaseUrl,
           feishuUrls: input.feishuUrls,
           requirements: input.requirements,
           phoneFilePath: input.phoneFilePath,
