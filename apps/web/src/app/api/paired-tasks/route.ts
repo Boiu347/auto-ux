@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -20,6 +20,22 @@ const TaskInputSchema = z.object({
 }).strict();
 
 type Scope = { pairingId: string; userId: string; workspaceId: string; agentId: string };
+const PairedTaskErrorStatuses: Record<string, number> = {
+  AUTO_UX_PUBLIC_BASE_URL_INVALID: 500,
+  DEVICE_NOT_PAIRED: 409,
+  EXECUTION_TOKEN_MISSING: 500,
+  INTERNAL_ERROR: 500,
+  INVALID_REQUEST: 400,
+  INVALID_TASK: 400,
+  UNAUTHENTICATED: 401
+};
+
+function safeCauseCode(error: unknown): string | null {
+  if (!error || typeof error !== "object" || !("code" in error)) return null;
+  const code = error.code;
+  return typeof code === "string" && /^[A-Z0-9_-]{2,80}$/.test(code) ? code : null;
+}
+
 type Dependencies = {
   getBrowserScope(token: string): Promise<Scope>;
   createExecution(
@@ -64,11 +80,12 @@ export function resolvePublicApiBaseUrl(requestUrl: string): string {
 export function createPairedTaskHandler(dependencies: Dependencies) {
   return async function POST(request: Request): Promise<Response> {
     const browserToken = readPairedBrowserToken(request);
-    if (!browserToken) {
-      return NextResponse.json({ code: "UNAUTHENTICATED" }, { status: 401 });
-    }
+    let requestId: string | null = null;
+    let executionId: string | null = null;
     try {
+      if (!browserToken) throw new Error("UNAUTHENTICATED");
       const input = TaskInputSchema.parse(await request.json());
+      requestId = input.requestId;
       const apiBaseUrl = resolvePublicApiBaseUrl(request.url);
       const paired = await dependencies.getBrowserScope(browserToken);
       const scope = { userId: paired.userId, workspaceId: paired.workspaceId };
@@ -82,7 +99,7 @@ export function createPairedTaskHandler(dependencies: Dependencies) {
         inputHash
       });
       if (!created.agentToken) throw new Error("EXECUTION_TOKEN_MISSING");
-      const executionId = created.execution.id;
+      executionId = created.execution.id;
       const task = await dependencies.enqueueTask(browserToken, {
         requestId: input.requestId,
         executionId,
@@ -102,9 +119,23 @@ export function createPairedTaskHandler(dependencies: Dependencies) {
         { status: 201 }
       );
     } catch (error) {
-      const code = error instanceof Error ? error.message : "INVALID_REQUEST";
-      const status = code === "UNAUTHENTICATED" ? 401 : code === "DEVICE_NOT_PAIRED" ? 409 : 400;
-      return NextResponse.json({ code }, { status });
+      const diagnosticId = `diag_${randomBytes(16).toString("hex")}`;
+      const rawCode = error instanceof Error ? error.message : "INVALID_REQUEST";
+      const code = error instanceof z.ZodError || error instanceof SyntaxError
+        ? "INVALID_REQUEST"
+        : Object.hasOwn(PairedTaskErrorStatuses, rawCode)
+          ? rawCode
+          : "INTERNAL_ERROR";
+      const status = PairedTaskErrorStatuses[code] ?? 500;
+      console.error("paired_task_failed", {
+        causeCode: safeCauseCode(error),
+        code,
+        diagnosticId,
+        errorName: error instanceof Error ? error.name : typeof error,
+        executionId,
+        requestId
+      });
+      return NextResponse.json({ code, diagnosticId }, { status });
     }
   };
 }

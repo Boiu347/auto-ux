@@ -5,6 +5,7 @@ import { createPairedTaskHandler } from "./route";
 describe("paired task API", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
 
   it("creates a real execution and queues its bounded Codex prompt", async () => {
@@ -76,6 +77,7 @@ describe("paired task API", () => {
   });
 
   it("rejects an unpaired browser", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
     const handler = createPairedTaskHandler({
       getBrowserScope: vi.fn(),
       createExecution: vi.fn(),
@@ -92,6 +94,7 @@ describe("paired task API", () => {
   });
 
   it("rejects a bind-only API base URL before creating an execution", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
     const createExecution = vi.fn();
     const handler = createPairedTaskHandler({
       getBrowserScope: vi.fn().mockResolvedValue({
@@ -119,9 +122,10 @@ describe("paired task API", () => {
       })
     );
 
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(500);
     expect(await response.json()).toEqual({
-      code: "AUTO_UX_PUBLIC_BASE_URL_INVALID"
+      code: "AUTO_UX_PUBLIC_BASE_URL_INVALID",
+      diagnosticId: expect.stringMatching(/^diag_[a-f0-9]{32}$/)
     });
     expect(createExecution).not.toHaveBeenCalled();
   });
@@ -135,6 +139,7 @@ describe("paired task API", () => {
       createExecution,
       enqueueTask: vi.fn()
     });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const response = await handler(
       new Request("http://0.0.0.0:8080/auto-ux/api/paired-tasks", {
         method: "POST",
@@ -151,10 +156,65 @@ describe("paired task API", () => {
       })
     );
 
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({
-      code: "AUTO_UX_PUBLIC_BASE_URL_INVALID"
+    expect(response.status).toBe(500);
+    const payload = await response.json();
+    expect(payload).toEqual({
+      code: "AUTO_UX_PUBLIC_BASE_URL_INVALID",
+      diagnosticId: expect.stringMatching(/^diag_[a-f0-9]{32}$/)
+    });
+    expect(consoleError).toHaveBeenCalledWith("paired_task_failed", {
+      causeCode: null,
+      code: "AUTO_UX_PUBLIC_BASE_URL_INVALID",
+      diagnosticId: payload.diagnosticId,
+      errorName: "Error",
+      executionId: null,
+      requestId: "request_1234567890abcdef"
     });
     expect(createExecution).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes unknown failures while logging a safe cause code", async () => {
+    vi.stubEnv("AUTO_UX_PUBLIC_BASE_URL", "https://auto-ux.example/auto-ux");
+    vi.stubEnv("NEXT_PUBLIC_BASE_PATH", "/auto-ux");
+    const databaseError = Object.assign(new Error("connection details must stay private"), {
+      code: "P1001"
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const handler = createPairedTaskHandler({
+      getBrowserScope: vi.fn().mockRejectedValue(databaseError),
+      createExecution: vi.fn(),
+      enqueueTask: vi.fn()
+    });
+    const response = await handler(
+      new Request("https://auto-ux.example/auto-ux/api/paired-tasks", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: `paired_browser=browser_token:${"b".repeat(64)}`
+        },
+        body: JSON.stringify({
+          requestId: "request_1234567890abcdef",
+          feishuUrls: ["https://guanghe.feishu.cn/docx/ABC123"],
+          requirements: "创建机器人",
+          phoneFilePath: "/Users/demo/phones.xlsx"
+        })
+      })
+    );
+
+    expect(response.status).toBe(500);
+    const payload = await response.json();
+    expect(payload).toEqual({
+      code: "INTERNAL_ERROR",
+      diagnosticId: expect.stringMatching(/^diag_[a-f0-9]{32}$/)
+    });
+    expect(JSON.stringify(payload)).not.toContain("connection details");
+    expect(consoleError).toHaveBeenCalledWith("paired_task_failed", {
+      causeCode: "P1001",
+      code: "INTERNAL_ERROR",
+      diagnosticId: payload.diagnosticId,
+      errorName: "Error",
+      executionId: null,
+      requestId: "request_1234567890abcdef"
+    });
   });
 });

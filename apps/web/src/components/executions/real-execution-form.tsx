@@ -113,9 +113,11 @@ export function RealExecutionForm({
         const value = (await response.json().catch(() => ({}))) as {
           executionId?: string;
           message?: string;
+          code?: string;
+          diagnosticId?: string;
         };
         if (!response.ok || !value.executionId) {
-          throw new Error(value.message ?? "无法把任务发送到 Mac。");
+          throw new Error(pairedTaskErrorMessage(value, response.status));
         }
         setCreated({ executionId: value.executionId, prompt: "" });
         setState("queued");
@@ -285,6 +287,38 @@ export function RealExecutionForm({
 function createRequestId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   return `request_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function pairedTaskErrorMessage(
+  value: { message?: string; code?: string; diagnosticId?: string },
+  status: number
+): string {
+  const code = typeof value.code === "string" && /^[A-Z0-9_]{2,80}$/.test(value.code)
+    ? value.code
+    : status
+      ? `HTTP_${status}`
+      : "INVALID_RESPONSE";
+  const messages: Record<string, string> = {
+    UNAUTHENTICATED: "浏览器的 Mac 配对凭证已失效，请重新配对。",
+    DEVICE_NOT_PAIRED: "当前浏览器尚未与 Mac 助手完成配对，请重新配对。",
+    AUTO_UX_PUBLIC_BASE_URL_INVALID: "服务端公开地址配置无效，请联系管理员检查部署配置。",
+    EXECUTION_TOKEN_MISSING: "任务已创建，但执行凭证生成失败，请稍后重试。",
+    INVALID_REQUEST: "提交内容格式不正确，请检查后重试。",
+    INVALID_TASK: "任务内容无法进入 Mac 队列，请检查内容长度和本地文件路径。",
+    INTERNAL_ERROR: "服务端创建任务失败，请稍后重试。",
+    INVALID_RESPONSE: "服务端返回了无法识别的结果，请稍后重试。"
+  };
+  const fallbackMessage = typeof value.message === "string" && value.message.trim()
+    ? value.message.trim()
+    : "无法把任务发送到 Mac。";
+  const message = messages[code] ?? fallbackMessage;
+  const diagnosticId = typeof value.diagnosticId === "string" && /^diag_[a-f0-9]{16,64}$/.test(value.diagnosticId)
+    ? value.diagnosticId
+    : undefined;
+  const diagnostic = diagnosticId
+    ? `诊断码：${code}；追踪号：${diagnosticId}`
+    : `诊断码：${code}`;
+  return `${message}（${diagnostic}）`;
 }
 
 async function hashInput(input: Record<string, unknown>): Promise<string> {

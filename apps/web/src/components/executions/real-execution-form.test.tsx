@@ -171,4 +171,35 @@ describe("RealExecutionForm", () => {
       "/executions/EX-PAIRED"
     );
   });
+
+  it("shows the paired-task diagnostic code returned by the server", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      code: "AUTO_UX_PUBLIC_BASE_URL_INVALID",
+      diagnosticId: "diag_1234567890abcdef"
+    }, { status: 500 })));
+    render(
+      <RealExecutionForm
+        apiBaseUrl="https://auto-ux.example"
+        localLaunchEnabled={false}
+        pairedDeviceReady
+      />
+    );
+    fireEvent.change(screen.getByLabelText(/飞书文档链接/), {
+      target: { value: "https://guanghe.feishu.cn/docx/ABC" }
+    });
+    fireEvent.change(screen.getByLabelText(/补充需求/), {
+      target: { value: "配置机器人" }
+    });
+    fireEvent.change(screen.getByLabelText(/本地号码文件路径/), {
+      target: { value: "/Users/demo/phones.xlsx" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "一键发送到 Mac Codex" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "服务端公开地址配置无效，请联系管理员检查部署配置。"
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "诊断码：AUTO_UX_PUBLIC_BASE_URL_INVALID；追踪号：diag_1234567890abcdef"
+    );
+  });
 });
