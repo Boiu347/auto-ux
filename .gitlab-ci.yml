@@ -118,7 +118,8 @@ deploy_preview:
     - install -m 0600 "$PREVIEW_DEPLOY_KEY" "$HOME/.ssh/id_ed25519"
     - printf '%s\n' "$PREVIEW_DEPLOY_HOST_KEY" > "$HOME/.ssh/known_hosts"
     - chmod 0600 "$HOME/.ssh/known_hosts"
-    - printf 'AUTO_UX_PUBLIC_BASE_URL=%s\n' "${CI_ENVIRONMENT_URL%/}" > .env.production.local
+    - printf 'AUTO_UX_PUBLIC_BASE_URL=%s\n' "${CI_ENVIRONMENT_URL%/}" > apps/web/.env.production.local
+    - test -s apps/web/.env.production.local
     - package_project nx-project.tar.gz
     - ssh -i "$HOME/.ssh/id_ed25519" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$PREVIEW_DEPLOY_USER@$PREVIEW_DEPLOY_HOST" "preview auto-ux $CI_COMMIT_SHA $CI_MERGE_REQUEST_IID service" < nx-project.tar.gz
   rules:
@@ -147,7 +148,8 @@ deploy_production:
     - install -m 0600 "$PRODUCTION_DEPLOY_KEY" "$HOME/.ssh/id_ed25519"
     - printf '%s\n' "$PRODUCTION_DEPLOY_HOST_KEY" > "$HOME/.ssh/known_hosts"
     - chmod 0600 "$HOME/.ssh/known_hosts"
-    - printf 'AUTO_UX_PUBLIC_BASE_URL=%s\n' "${CI_ENVIRONMENT_URL%/}" > .env.production.local
+    - printf 'AUTO_UX_PUBLIC_BASE_URL=%s\n' "${CI_ENVIRONMENT_URL%/}" > apps/web/.env.production.local
+    - test -s apps/web/.env.production.local
     - >-
       BUILDKITD_FLAGS=--oci-worker-no-process-sandbox
       buildctl-daemonless.sh build

@@ -4,7 +4,7 @@
 .dev-runtime
 .env
 .env.*
-!.env.production.local
+!apps/web/.env.production.local
 node_modules
 **/node_modules
 .next
