@@ -52,6 +52,8 @@ python3 scripts/report_progress.py init <report-state.json> <apiBaseUrl> <execut
 
 之后每个阶段只在取得真实证据后用 `event` 上报，并至少每 45 秒运行一次 `heartbeat`。回报失败不等于业务动作失败；停止外部写入、修复回报连接后再继续，禁止补写虚假成功记录。
 
+网站联动、Mac Agent 安装/升级或生产部署诊断时，先读取 [automation-runtime.md](references/automation-runtime.md)，按其中的端到端验收证据判断自动化是否真实可用。
+
 网站已经与 Mac Agent 配对时，任务应由 Agent 通过首次安装器自动初始化的 Codex `app-server daemon` 结构化创建并发送。Agent 连接 `app-server proxy` 时必须先完成 WebSocket 升级，再在 WebSocket 文本帧中发送 JSON-RPC；不得把 JSONL 直接写入代理并凭单元测试假定真实 daemon 可用。安装器在缺少受管 Codex 本地组件时应使用 Codex 官方安装器非交互安装，并把受管可执行文件的绝对路径写入 LaunchAgent；不得要求同事再执行第二条 Codex 安装命令。不得要求同事复制任务提示词、按 Command+V、授予辅助功能键盘控制权限，或把剪贴板兜底描述成“自动化”。首次配对/安装只做一次；同一网站的 Agent/Skill 升级必须复用现有设备令牌，不得要求重新生成配对码。只有本机没有配对配置或配置属于其他网站时才重新配对。日常系统权限不得替代发布、导号、拨号三个业务确认门。若 Agent 返回 `CODEX_CLI_NOT_FOUND`、`CODEX_APP_SERVER_TIMEOUT` 或 `CODEX_APP_SERVER_FAILED`，停止交付并修复/升级 Codex，不退回模拟按键。
 
 回报器只接受网站合同中的标准步骤：`source.parse`、`draft.confirm`、`environment.preflight`、`robot.create`、`field.configure`、`voice.preflight`、`publish.confirm`、`publish.verify`、`numbers.confirm`、`dial.confirm`、`dial.verify`、`complete`。禁止自造 `task.create.v3`、`numbers.import` 等步骤。每次事件前回报器会续租执行锁；只有 `EXECUTION_LOCK_MISMATCH` 时才可用同一 execution/session 重新 claim，其他认证错误必须停止。
