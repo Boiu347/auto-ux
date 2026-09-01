@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const VERSION = "0.4.2";
+const VERSION = "0.4.3";
 const POLL_INTERVAL_MS = 3_000;
 const DEFAULT_CONFIG_PATH = join(homedir(), ".config", "auto-ux", "agent.json");
 const CODEX_RPC_TIMEOUT_MS = 20_000;
@@ -142,7 +143,11 @@ export async function startCodexTask(prompt, workspacePath, options = {}) {
     ["app-server", "proxy"],
     { shell: false, stdio: ["pipe", "pipe", "pipe"] }
   );
-  const rpc = createJsonRpcClient(child, options.timeoutMs ?? CODEX_RPC_TIMEOUT_MS);
+  const rpc = createJsonRpcClient(
+    child,
+    options.timeoutMs ?? CODEX_RPC_TIMEOUT_MS,
+    options.webSocketKey
+  );
   try {
     await rpc.request("initialize", {
       clientInfo: {
@@ -174,9 +179,8 @@ export async function startCodexTask(prompt, workspacePath, options = {}) {
   }
 }
 
-function createJsonRpcClient(child, timeoutMs) {
+export function createJsonRpcClient(child, timeoutMs, webSocketKey) {
   let nextId = 1;
-  let buffer = "";
   const pending = new Map();
   const failAll = (error) => {
     for (const { reject, timer } of pending.values()) {
@@ -185,40 +189,22 @@ function createJsonRpcClient(child, timeoutMs) {
     }
     pending.clear();
   };
-  child.stdout.setEncoding("utf8");
-  child.stdout.on("data", (chunk) => {
-    buffer += chunk;
-    for (;;) {
-      const newline = buffer.indexOf("\n");
-      if (newline < 0) break;
-      const line = buffer.slice(0, newline).trim();
-      buffer = buffer.slice(newline + 1);
-      if (!line) continue;
-      let message;
-      try {
-        message = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (message.id === undefined) {
-        continue;
-      }
-      const entry = pending.get(String(message.id));
-      if (!entry) continue;
-      pending.delete(String(message.id));
-      clearTimeout(entry.timer);
-      if (message.error) {
-        entry.reject(new Error(`CODEX_RPC_ERROR:${message.error.code ?? "unknown"}`));
-      } else {
-        entry.resolve(message.result);
-      }
+  const transport = createWebSocketTransport(child, (message) => {
+    if (message.id === undefined) return;
+    const entry = pending.get(String(message.id));
+    if (!entry) return;
+    pending.delete(String(message.id));
+    clearTimeout(entry.timer);
+    if (message.error) {
+      entry.reject(new Error(`CODEX_RPC_ERROR:${message.error.code ?? "unknown"}`));
+    } else {
+      entry.resolve(message.result);
     }
-  });
+  }, failAll, webSocketKey);
   child.once("error", failAll);
   child.once("close", (code) =>
     failAll(new Error(`CODEX_APP_SERVER_EXITED:${code ?? "unknown"}`))
   );
-  const write = (message) => child.stdin.write(`${JSON.stringify(message)}\n`);
   return {
     request(method, params) {
       const id = nextId++;
@@ -228,11 +214,11 @@ function createJsonRpcClient(child, timeoutMs) {
           reject(new Error("CODEX_RPC_TIMEOUT"));
         }, timeoutMs);
         pending.set(String(id), { resolve, reject, timer });
-        write({ jsonrpc: "2.0", id, method, params });
+        transport.send({ jsonrpc: "2.0", id, method, params });
       });
     },
     notify(method, params) {
-      write({ jsonrpc: "2.0", method, ...(params === undefined ? {} : { params }) });
+      transport.send({ jsonrpc: "2.0", method, ...(params === undefined ? {} : { params }) });
     },
     detach() {
       child.stdin.end();
@@ -244,6 +230,149 @@ function createJsonRpcClient(child, timeoutMs) {
       child.kill();
     }
   };
+}
+
+function createWebSocketTransport(child, onMessage, onError, providedKey) {
+  const key = providedKey ?? randomBytes(16).toString("base64");
+  const expectedAccept = createHash("sha1")
+    .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+    .digest("base64");
+  let buffer = Buffer.alloc(0);
+  let upgraded = false;
+  let fragmentedOpcode = null;
+  let fragments = [];
+  const queued = [];
+
+  const sendFrame = (opcode, payload) => {
+    child.stdin.write(encodeWebSocketFrame(opcode, Buffer.from(payload)));
+  };
+  const deliverText = (payload) => {
+    for (const line of payload.toString("utf8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        onMessage(JSON.parse(line));
+      } catch {
+        onError(new Error("CODEX_INVALID_RESPONSE"));
+      }
+    }
+  };
+  const processFrames = () => {
+    for (;;) {
+      const frame = readWebSocketFrame(buffer);
+      if (!frame) return;
+      buffer = buffer.subarray(frame.bytesConsumed);
+      if (frame.opcode === 0x8) {
+        onError(new Error("CODEX_APP_SERVER_CLOSED"));
+        return;
+      }
+      if (frame.opcode === 0x9) {
+        sendFrame(0xA, frame.payload);
+        continue;
+      }
+      if (frame.opcode === 0xA) continue;
+      if (frame.opcode === 0x1 || frame.opcode === 0x2) {
+        fragmentedOpcode = frame.opcode;
+        fragments = [frame.payload];
+      } else if (frame.opcode === 0x0 && fragmentedOpcode !== null) {
+        fragments.push(frame.payload);
+      } else {
+        onError(new Error("CODEX_INVALID_RESPONSE"));
+        return;
+      }
+      if (frame.fin) {
+        const payload = Buffer.concat(fragments);
+        const opcode = fragmentedOpcode;
+        fragmentedOpcode = null;
+        fragments = [];
+        if (opcode === 0x1) deliverText(payload);
+      }
+    }
+  };
+
+  child.stdout.on("data", (chunk) => {
+    buffer = Buffer.concat([buffer, Buffer.from(chunk)]);
+    if (!upgraded) {
+      const headerEnd = buffer.indexOf("\r\n\r\n");
+      if (headerEnd < 0) return;
+      const response = buffer.subarray(0, headerEnd).toString("utf8");
+      buffer = buffer.subarray(headerEnd + 4);
+      const accept = response.match(/^sec-websocket-accept:\s*(.+)$/im)?.[1]?.trim();
+      if (!/^HTTP\/1\.[01] 101\b/.test(response) || accept !== expectedAccept) {
+        onError(new Error("CODEX_WEBSOCKET_HANDSHAKE_FAILED"));
+        return;
+      }
+      upgraded = true;
+      for (const message of queued.splice(0)) sendFrame(0x1, message);
+    }
+    processFrames();
+  });
+  child.stdin.write(
+    `GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`
+  );
+
+  return {
+    send(message) {
+      const payload = JSON.stringify(message);
+      if (upgraded) sendFrame(0x1, payload);
+      else queued.push(payload);
+    }
+  };
+}
+
+function encodeWebSocketFrame(opcode, payload) {
+  const mask = randomBytes(4);
+  const length = payload.length;
+  const extendedLengthBytes = length < 126 ? 0 : length <= 0xffff ? 2 : 8;
+  const frame = Buffer.alloc(2 + extendedLengthBytes + 4 + length);
+  frame[0] = 0x80 | opcode;
+  frame[1] = 0x80 | (extendedLengthBytes === 0 ? length : extendedLengthBytes === 2 ? 126 : 127);
+  let offset = 2;
+  if (extendedLengthBytes === 2) {
+    frame.writeUInt16BE(length, offset);
+    offset += 2;
+  } else if (extendedLengthBytes === 8) {
+    frame.writeBigUInt64BE(BigInt(length), offset);
+    offset += 8;
+  }
+  mask.copy(frame, offset);
+  offset += 4;
+  for (let index = 0; index < length; index += 1) {
+    frame[offset + index] = payload[index] ^ mask[index % 4];
+  }
+  return frame;
+}
+
+function readWebSocketFrame(buffer) {
+  if (buffer.length < 2) return null;
+  const fin = (buffer[0] & 0x80) !== 0;
+  const opcode = buffer[0] & 0x0f;
+  const masked = (buffer[1] & 0x80) !== 0;
+  let length = buffer[1] & 0x7f;
+  let offset = 2;
+  if (length === 126) {
+    if (buffer.length < offset + 2) return null;
+    length = buffer.readUInt16BE(offset);
+    offset += 2;
+  } else if (length === 127) {
+    if (buffer.length < offset + 8) return null;
+    const longLength = buffer.readBigUInt64BE(offset);
+    if (longLength > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new Error("CODEX_INVALID_RESPONSE");
+    }
+    length = Number(longLength);
+    offset += 8;
+  }
+  const maskBytes = masked ? 4 : 0;
+  if (buffer.length < offset + maskBytes + length) return null;
+  const mask = masked ? buffer.subarray(offset, offset + 4) : null;
+  offset += maskBytes;
+  const payload = Buffer.from(buffer.subarray(offset, offset + length));
+  if (mask) {
+    for (let index = 0; index < payload.length; index += 1) {
+      payload[index] ^= mask[index % 4];
+    }
+  }
+  return { fin, opcode, payload, bytesConsumed: offset + length };
 }
 
 async function ensureCodexDaemon(command) {
@@ -258,7 +387,7 @@ function codexDeliveryErrorCode(error) {
   const message = error instanceof Error ? error.message : String(error);
   if (/ENOENT|not found/i.test(message)) return "CODEX_CLI_NOT_FOUND";
   if (/CODEX_RPC_TIMEOUT/.test(message)) return "CODEX_APP_SERVER_TIMEOUT";
-  if (/CODEX_RPC_ERROR|CODEX_INVALID_RESPONSE|CODEX_APP_SERVER_EXITED/.test(message)) {
+  if (/CODEX_RPC_ERROR|CODEX_INVALID_RESPONSE|CODEX_APP_SERVER_(EXITED|CLOSED)|CODEX_WEBSOCKET_HANDSHAKE_FAILED/.test(message)) {
     return "CODEX_APP_SERVER_FAILED";
   }
   return "CODEX_SEND_FAILED";

@@ -176,10 +176,10 @@ describe("DeviceService", () => {
       version: "0.1.0"
     });
 
-    await expect(fixture.service.claimNextTask(claimed.deviceToken, "0.4.2"))
+    await expect(fixture.service.claimNextTask(claimed.deviceToken, "0.4.3"))
       .resolves.toBeNull();
     expect(await fixture.service.getBrowserPairing(created.browserToken)).toMatchObject({
-      version: "0.4.2",
+      version: "0.4.3",
       online: true
     });
     await expect(fixture.service.claimNextTask(claimed.deviceToken, "bad version"))

@@ -88,7 +88,7 @@ describe("Mac device API", () => {
       new Request("https://auto-ux.example/api/devices/tasks/next", {
         headers: {
           authorization: `Bearer device_token:${"d".repeat(64)}`,
-          "x-auto-ux-agent-version": "0.4.2"
+          "x-auto-ux-agent-version": "0.4.3"
         }
       })
     );
@@ -96,7 +96,7 @@ describe("Mac device API", () => {
     expect(response.status).toBe(204);
     expect(claimNextTask).toHaveBeenCalledWith(
       `device_token:${"d".repeat(64)}`,
-      "0.4.2"
+      "0.4.3"
     );
   });
 

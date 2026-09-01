@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { test } from "node:test";
 import { readFile } from "node:fs/promises";
@@ -79,8 +80,41 @@ test("pollOnce treats an empty queue as healthy idle state", async () => {
     ),
     "idle"
   );
-  assert.equal(requests[0][1].headers["x-auto-ux-agent-version"], "0.4.2");
+  assert.equal(requests[0][1].headers["x-auto-ux-agent-version"], "0.4.3");
 });
+
+function readClientFrame(buffer) {
+  if (buffer.length < 2) return null;
+  const masked = (buffer[1] & 0x80) !== 0;
+  let length = buffer[1] & 0x7f;
+  let offset = 2;
+  if (length === 126) {
+    if (buffer.length < 4) return null;
+    length = buffer.readUInt16BE(2);
+    offset = 4;
+  } else if (length === 127) {
+    if (buffer.length < 10) return null;
+    length = Number(buffer.readBigUInt64BE(2));
+    offset = 10;
+  }
+  if (!masked || buffer.length < offset + 4 + length) return null;
+  const mask = buffer.subarray(offset, offset + 4);
+  offset += 4;
+  const payload = Buffer.from(buffer.subarray(offset, offset + length));
+  for (let index = 0; index < payload.length; index += 1) {
+    payload[index] ^= mask[index % 4];
+  }
+  return { payload, bytesConsumed: offset + length };
+}
+
+function serverTextFrame(message) {
+  const payload = Buffer.from(JSON.stringify(message));
+  assert.ok(payload.length <= 0xffff);
+  const prefix = payload.length < 126
+    ? Buffer.from([0x81, payload.length])
+    : Buffer.from([0x81, 126, payload.length >> 8, payload.length & 0xff]);
+  return Buffer.concat([prefix, payload]);
+}
 
 test("startCodexTask uses the managed daemon proxy and starts one turn", async () => {
   const messages = [];
@@ -90,16 +124,40 @@ test("startCodexTask uses the managed daemon proxy and starts one turn", async (
   child.stderr = new PassThrough();
   child.kill = () => child.emit("close", 0);
   child.unref = () => undefined;
-  child.stdin.setEncoding("utf8");
-  child.stdin.on("data", (line) => {
-    const message = JSON.parse(line.trim());
-    messages.push(message);
-    if (message.method === "initialize") {
-      child.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} })}\n`);
-    } else if (message.method === "thread/start") {
-      child.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { thread: { id: "thread-1" } } })}\n`);
-    } else if (message.method === "turn/start") {
-      child.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { turn: { id: "turn-1" } } })}\n`);
+  const webSocketKey = "dGhlIHNhbXBsZSBub25jZQ==";
+  let input = Buffer.alloc(0);
+  let upgraded = false;
+  child.stdin.on("data", (chunk) => {
+    input = Buffer.concat([input, Buffer.from(chunk)]);
+    if (!upgraded) {
+      const headerEnd = input.indexOf("\r\n\r\n");
+      if (headerEnd < 0) return;
+      const request = input.subarray(0, headerEnd).toString("utf8");
+      input = input.subarray(headerEnd + 4);
+      assert.match(request, /^GET \/ HTTP\/1\.1/);
+      assert.match(request, /Upgrade: websocket/i);
+      assert.match(request, new RegExp(`Sec-WebSocket-Key: ${webSocketKey}`));
+      const accept = createHash("sha1")
+        .update(`${webSocketKey}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+        .digest("base64");
+      child.stdout.write(
+        `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`
+      );
+      upgraded = true;
+    }
+    for (;;) {
+      const frame = readClientFrame(input);
+      if (!frame) break;
+      input = input.subarray(frame.bytesConsumed);
+      const message = JSON.parse(frame.payload.toString("utf8"));
+      messages.push(message);
+      if (message.method === "initialize") {
+        child.stdout.write(serverTextFrame({ jsonrpc: "2.0", id: message.id, result: {} }));
+      } else if (message.method === "thread/start") {
+        child.stdout.write(serverTextFrame({ jsonrpc: "2.0", id: message.id, result: { thread: { id: "thread-1" } } }));
+      } else if (message.method === "turn/start") {
+        child.stdout.write(serverTextFrame({ jsonrpc: "2.0", id: message.id, result: { turn: { id: "turn-1" } } }));
+      }
     }
   });
   const spawned = [];
@@ -107,6 +165,7 @@ test("startCodexTask uses the managed daemon proxy and starts one turn", async (
 
   const result = await startCodexTask("Use the skill", "/Users/demo", {
     codexPath: "/usr/local/bin/codex",
+    webSocketKey,
     ensureDaemon: async (command) => daemon.push(command),
     spawnProcess: (command, args) => {
       spawned.push([command, args]);

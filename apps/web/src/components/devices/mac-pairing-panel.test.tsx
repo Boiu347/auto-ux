@@ -32,7 +32,7 @@ describe("MacPairingPanel", () => {
       status: "paired",
       pairingId: "Pairing_1",
       agentId: "MacAgent_1",
-      version: "0.4.2",
+      version: "0.4.3",
       online: true,
       lastSeenAt: "2026-08-06T04:00:00.000Z"
     })));
