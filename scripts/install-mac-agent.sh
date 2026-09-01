@@ -12,6 +12,8 @@ LOG_DIR="$HOME/Library/Logs/AutoUX"
 PLIST_PATH="$HOME/Library/LaunchAgents/com.auto-ux.mac-agent.plist"
 LABEL="com.auto-ux.mac-agent"
 CONFIG_PATH="${AUTO_UX_AGENT_CONFIG:-$HOME/.config/auto-ux/agent.json}"
+MANAGED_CODEX_PATH="$HOME/.codex/packages/standalone/current/codex"
+CODEX_INSTALLER_URL="https://chatgpt.com/codex/install.sh"
 
 if [[ $(uname -s) != "Darwin" ]]; then
   echo "当前安装器只支持 macOS。" >&2
@@ -30,23 +32,6 @@ if ! command -v node >/dev/null 2>&1; then
   echo "未找到 Node.js 20 或更高版本，请先安装 Node.js。" >&2
   exit 1
 fi
-if ! command -v codex >/dev/null 2>&1; then
-  echo "未找到 Codex CLI；请先在 Codex 设置中完成命令行工具安装。" >&2
-  exit 1
-fi
-if ! codex app-server --help >/dev/null 2>&1; then
-  echo "当前 Codex 版本不支持结构化任务投递，请先升级 Codex。" >&2
-  exit 1
-fi
-if ! codex app-server daemon bootstrap >/dev/null 2>&1; then
-  echo "无法初始化 Codex 本地任务服务，请升级 Codex 后重试。" >&2
-  exit 1
-fi
-if ! codex app-server daemon start >/dev/null 2>&1; then
-  echo "无法启动 Codex 本地任务服务。" >&2
-  exit 1
-fi
-
 NODE_PATH=$(command -v node)
 NODE_MAJOR=$($NODE_PATH -p 'Number(process.versions.node.split(".")[0])')
 if (( NODE_MAJOR < 20 )); then
@@ -79,6 +64,30 @@ download_file() {
     "$source_url" -o "$destination"
 }
 
+TEMP_SOURCE=$(mktemp -d "${TMPDIR:-/tmp}/auto-ux-install.XXXXXX")
+trap 'rm -rf "$TEMP_SOURCE"' EXIT
+
+if [[ ! -x $MANAGED_CODEX_PATH ]]; then
+  CODEX_INSTALLER_PATH="$TEMP_SOURCE/codex-install.sh"
+  if ! download_file "$CODEX_INSTALLER_URL" "$CODEX_INSTALLER_PATH"; then
+    echo "Codex 本地任务组件下载失败，请检查网络后重试。" >&2
+    exit 1
+  fi
+  CODEX_NON_INTERACTIVE=1 /bin/sh "$CODEX_INSTALLER_PATH"
+fi
+if [[ ! -x $MANAGED_CODEX_PATH ]] || ! "$MANAGED_CODEX_PATH" app-server --help >/dev/null 2>&1; then
+  echo "当前 Codex 版本不支持结构化任务投递，请升级 Codex。" >&2
+  exit 1
+fi
+if ! "$MANAGED_CODEX_PATH" app-server daemon bootstrap >/dev/null 2>&1; then
+  echo "无法初始化 Codex 本地任务服务。" >&2
+  exit 1
+fi
+if ! "$MANAGED_CODEX_PATH" app-server daemon start >/dev/null 2>&1; then
+  echo "无法启动 Codex 本地任务服务。" >&2
+  exit 1
+fi
+
 mkdir -p "$INSTALL_DIR" "$LOG_DIR" "$(dirname "$PLIST_PATH")"
 TEMP_AGENT="$AGENT_PATH.download"
 if ! download_file "$AGENT_SOURCE_URL" "$TEMP_AGENT"; then
@@ -88,8 +97,6 @@ fi
 chmod 700 "$TEMP_AGENT"
 mv "$TEMP_AGENT" "$AGENT_PATH"
 
-TEMP_SOURCE=$(mktemp -d "${TMPDIR:-/tmp}/auto-ux-skill.XXXXXX")
-trap 'rm -rf "$TEMP_SOURCE"' EXIT
 SOURCE_ARCHIVE="$TEMP_SOURCE/baidu-cloud-one-click-config.tar.gz"
 if ! download_file "$SOURCE_ARCHIVE_URL" "$SOURCE_ARCHIVE"; then
   echo "百度云一键配置 Skill 下载失败，请检查生产站点连接后重试。" >&2
@@ -119,6 +126,7 @@ xml_escape() {
 
 NODE_XML=$(xml_escape "$NODE_PATH")
 AGENT_XML=$(xml_escape "$AGENT_PATH")
+CODEX_XML=$(xml_escape "$MANAGED_CODEX_PATH")
 OUT_XML=$(xml_escape "$LOG_DIR/agent.log")
 ERR_XML=$(xml_escape "$LOG_DIR/agent.error.log")
 
@@ -129,6 +137,8 @@ PLIST_CONTENT="<?xml version=\"1.0\" encoding=\"UTF-8\"?>
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key>
   <array><string>$NODE_XML</string><string>$AGENT_XML</string><string>run</string></array>
+  <key>EnvironmentVariables</key>
+  <dict><key>AUTO_UX_CODEX_PATH</key><string>$CODEX_XML</string></dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
@@ -140,7 +150,18 @@ PLIST_CONTENT="<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 printf '%s\n' "$PLIST_CONTENT" > "$PLIST_PATH"
 chmod 600 "$PLIST_PATH"
 launchctl bootout "gui/$UID/$LABEL" >/dev/null 2>&1 || true
-launchctl bootstrap "gui/$UID" "$PLIST_PATH"
+AGENT_LOADED=0
+for _ in 1 2 3 4 5; do
+  if launchctl bootstrap "gui/$UID" "$PLIST_PATH" >/dev/null 2>&1; then
+    AGENT_LOADED=1
+    break
+  fi
+  sleep 1
+done
+if [[ $AGENT_LOADED != 1 ]]; then
+  echo "无法加载 Auto UX Mac 助手，请检查 LaunchAgent 日志。" >&2
+  exit 1
+fi
 launchctl kickstart -k "gui/$UID/$LABEL"
 
 echo "Auto UX Mac 助手已安装并启动。"

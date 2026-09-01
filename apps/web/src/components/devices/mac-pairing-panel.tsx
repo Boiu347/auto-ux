@@ -20,7 +20,7 @@ type PairingState =
   | { status: "expired" }
   | { status: "error"; message: string };
 
-const CURRENT_AGENT_VERSION = "0.4.0";
+const CURRENT_AGENT_VERSION = "0.4.1";
 
 export function MacPairingPanel({
   origin,
