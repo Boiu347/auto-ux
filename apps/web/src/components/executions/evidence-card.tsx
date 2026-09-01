@@ -64,7 +64,32 @@ export function formatEvidence(evidence: ExecutionEvidence): string {
     return `${evidence.summary.field} / ${evidence.summary.result}`;
   }
   if (evidence.kind === "platform_record") {
-    return evidence.summary.outcome;
+    const labels = {
+      unavailable: "暂未查到外呼记录",
+      recorded: "已生成外呼记录",
+      ringing: "振铃中",
+      connected: "已接通",
+      no_answer: "无人接听",
+      busy: "用户忙",
+      failed: "外呼失败",
+      robot_hangup_incomplete: "机器人在流程完成前挂断"
+    } as const;
+    const diagnostics = [
+      evidence.summary.isRobotHangup === undefined
+        ? null
+        : `机器人挂断 ${evidence.summary.isRobotHangup ? "是" : "否"}`,
+      evidence.summary.talkingTimeLen === undefined
+        ? null
+        : `通话 ${evidence.summary.talkingTimeLen} 秒`,
+      evidence.summary.talkingTurn === undefined
+        ? null
+        : `有效轮次 ${evidence.summary.talkingTurn}`,
+      evidence.summary.sipCode ? `SIP ${evidence.summary.sipCode}` : null,
+      evidence.summary.completeType === undefined
+        ? null
+        : `完成类型 ${evidence.summary.completeType}`
+    ].filter(Boolean);
+    return `${labels[evidence.summary.outcome]}${diagnostics.length ? `；${diagnostics.join("，")}` : ""}`;
   }
 
   const samples =

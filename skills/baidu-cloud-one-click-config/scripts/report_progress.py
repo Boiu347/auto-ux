@@ -15,6 +15,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+VALID_STEPS = (
+    "source.parse", "draft.confirm", "environment.preflight", "robot.create",
+    "field.configure", "voice.preflight", "publish.confirm", "publish.verify",
+    "numbers.confirm", "dial.confirm", "dial.verify", "complete",
+)
+VALID_PHASES = (
+    "source_parse", "draft_confirm", "environment_preflight", "robot_create",
+    "field_configure", "voice_preflight", "publish_confirm", "publish_verify",
+    "numbers_confirm", "dial_confirm", "call_verify", "complete",
+)
+
+
+class ControlPlaneError(RuntimeError):
+    def __init__(self, status: int, code: str, details=None):
+        self.status = status
+        self.code = code
+        self.details = details
+        super().__init__(f"control plane HTTP {status}: {code}")
+
 
 def request_json(state: dict, method: str, path: str, payload: Optional[dict] = None):
     data = None if payload is None else json.dumps(payload).encode("utf-8")
@@ -34,7 +53,49 @@ def request_json(state: dict, method: str, path: str, payload: Optional[dict] = 
             return None if not raw else json.loads(raw)
     except urllib.error.HTTPError as error:
         body = error.read().decode("utf-8", "replace")
-        raise RuntimeError(f"control plane HTTP {error.code}: {body[:300]}") from error
+        try:
+            parsed = json.loads(body)
+        except json.JSONDecodeError:
+            parsed = {}
+        raise ControlPlaneError(
+            error.code,
+            parsed.get("code", "CONTROL_PLANE_ERROR"),
+            parsed.get("details"),
+        ) from error
+
+
+def manifest(state: dict) -> dict:
+    return {
+        "pluginVersion": "2.1.0", "contractVersion": "2",
+        "capabilities": {
+            "feishuCli": True,
+            "baiduApi": True,
+            "browserFallback": True,
+        },
+        "agentId": state["agentId"], "sessionId": state["sessionId"],
+        "executionId": state["executionId"],
+    }
+
+
+def claim(state: dict):
+    return request_json(
+        state,
+        "POST",
+        f"/api/executions/{urllib.parse.quote(state['executionId'], safe='')}/agent/claim",
+        manifest(state),
+    )
+
+
+def renew_agent_lock(state: dict) -> None:
+    execution = urllib.parse.quote(state["executionId"], safe="")
+    try:
+        request_json(state, "POST", f"/api/executions/{execution}/agent/heartbeat", {
+            "agentId": state["agentId"], "sessionId": state["sessionId"]
+        })
+    except ControlPlaneError as error:
+        if error.code != "EXECUTION_LOCK_MISMATCH":
+            raise
+        claim(state)
 
 
 def load(path: str) -> dict:
@@ -70,6 +131,39 @@ def checkpoint_event(state: dict, step: str, status: str, phase: str, attempt: i
     }
 
 
+def call_record_event(state: dict, status: str, outcome: str, record_path: str, attempt: int) -> dict:
+    payload = load(record_path)
+    items = payload.get("items") or []
+    if len(items) != 1:
+        raise RuntimeError("call evidence must contain exactly one task-filtered item")
+    item = items[0]
+    safe_fields = (
+        "isRobotHangup", "completeType", "durationTimeLen", "ringingTimeLen",
+        "talkingTimeLen", "talkingTurn", "sipCode", "sipInfo", "action",
+    )
+    summary = {"outcome": outcome}
+    summary.update({key: item[key] for key in safe_fields if item.get(key) is not None})
+    identity = f"{state['executionId']}:{item.get('sessionId', '')}:{attempt}"
+    fingerprint = hashlib.sha256(identity.encode()).hexdigest()
+    return {
+        "executionId": state["executionId"],
+        "stepId": "dial.verify",
+        "attempt": attempt,
+        "status": status,
+        "occurredAt": now(),
+        "inputHash": f"sha256:{fingerprint}",
+        "evidence": {
+            "kind": "platform_record",
+            "summary": summary,
+            "reference": {
+                "kind": "platform_record",
+                "id": f"platform_record:{fingerprint[:24]}",
+            },
+        },
+        "nextAction": "inspect_call_record" if status in ("failed", "unknown") else "stop",
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
@@ -80,11 +174,23 @@ def main() -> None:
     init.add_argument("agent_token")
     event = commands.add_parser("event")
     event.add_argument("state")
-    event.add_argument("step")
+    event.add_argument("step", choices=VALID_STEPS)
     event.add_argument("status")
-    event.add_argument("phase")
+    event.add_argument("phase", choices=VALID_PHASES)
     event.add_argument("--attempt", type=int, default=1)
     event.add_argument("--confirmed-action", choices=["publish", "import_numbers", "start_dial"])
+    call_event = commands.add_parser("call-event")
+    call_event.add_argument("state")
+    call_event.add_argument("status", choices=["succeeded", "failed", "unknown"])
+    call_event.add_argument(
+        "outcome",
+        choices=[
+            "unavailable", "recorded", "ringing", "connected", "no_answer",
+            "busy", "failed", "robot_hangup_incomplete",
+        ],
+    )
+    call_event.add_argument("record")
+    call_event.add_argument("--attempt", type=int, default=1)
     heartbeat = commands.add_parser("heartbeat")
     heartbeat.add_argument("state")
     wait = commands.add_parser("wait-confirmation")
@@ -105,16 +211,7 @@ def main() -> None:
             "agentId": "MacCodex",
             "sessionId": f"Session_{secrets.token_hex(12)}",
         }
-        claimed = request_json(state, "POST", f"/api/executions/{args.execution_id}/agent/claim", {
-            "pluginVersion": "2.0.0", "contractVersion": "2",
-            "capabilities": {
-                "feishuCli": True,
-                "baiduApi": True,
-                "browserFallback": True,
-            },
-            "agentId": state["agentId"], "sessionId": state["sessionId"],
-            "executionId": state["executionId"],
-        })
+        claimed = claim(state)
         if not claimed:
             raise RuntimeError("control plane returned an empty claim")
         save(args.state, state)
@@ -124,11 +221,10 @@ def main() -> None:
     state = load(args.state)
     execution = urllib.parse.quote(state["executionId"], safe="")
     if args.command == "heartbeat":
-        request_json(state, "POST", f"/api/executions/{execution}/agent/heartbeat", {
-            "agentId": state["agentId"], "sessionId": state["sessionId"]
-        })
+        renew_agent_lock(state)
         print("renewed")
     elif args.command == "event":
+        renew_agent_lock(state)
         payload = {
             "agentId": state["agentId"], "sessionId": state["sessionId"],
             "event": checkpoint_event(state, args.step, args.status, args.phase, args.attempt),
@@ -146,6 +242,16 @@ def main() -> None:
             }
         request_json(state, "POST", f"/api/executions/{execution}/events", payload)
         print("reported")
+    elif args.command == "call-event":
+        renew_agent_lock(state)
+        payload = {
+            "agentId": state["agentId"], "sessionId": state["sessionId"],
+            "event": call_record_event(
+                state, args.status, args.outcome, args.record, args.attempt
+            ),
+        }
+        request_json(state, "POST", f"/api/executions/{execution}/events", payload)
+        print("reported")
     elif args.command == "decide":
         result = request_json(state, "POST", f"/api/executions/{execution}/decision", {
             "action": args.action, "decision": args.decision
@@ -159,9 +265,7 @@ def main() -> None:
         query = urllib.parse.urlencode({"action": args.action})
         while time.monotonic() < deadline:
             if time.monotonic() >= next_heartbeat:
-                request_json(state, "POST", f"/api/executions/{execution}/agent/heartbeat", {
-                    "agentId": state["agentId"], "sessionId": state["sessionId"]
-                })
+                renew_agent_lock(state)
                 next_heartbeat = time.monotonic() + 30
             result = request_json(state, "GET", f"/api/executions/{execution}/decision?{query}")
             if result:

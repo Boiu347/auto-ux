@@ -17,7 +17,7 @@ describe("home page", () => {
     expect(markup).toContain("发起真实配置");
     expect(markup).toContain("飞书文档链接");
     expect(markup).toContain("本地号码文件路径");
-    expect(markup).toContain("一键配置并打开 Codex");
+    expect(markup).toContain("请先配对 Mac 助手");
   });
 
   it("presents task creation as the primary workspace with supporting guidance", () => {

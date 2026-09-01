@@ -32,7 +32,7 @@ describe("MacPairingPanel", () => {
       status: "paired",
       pairingId: "Pairing_1",
       agentId: "MacAgent_1",
-      version: "0.1.0",
+      version: "0.4.0",
       online: true,
       lastSeenAt: "2026-08-06T04:00:00.000Z"
     })));
@@ -40,5 +40,25 @@ describe("MacPairingPanel", () => {
 
     await screen.findByText("Mac 助手在线");
     await waitFor(() => expect(onReadyChange).toHaveBeenCalledWith(true));
+  });
+
+  it("offers an in-place upgrade that preserves an existing pairing", async () => {
+    const onReadyChange = vi.fn();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      status: "paired",
+      pairingId: "Pairing_1",
+      agentId: "MacAgent_1",
+      version: "0.3.0",
+      online: true,
+      lastSeenAt: "2026-08-06T04:00:00.000Z"
+    })));
+    render(<MacPairingPanel origin="https://auto-ux.example" onReadyChange={onReadyChange} />);
+
+    expect(await screen.findByText(/升级会保留现有配对/)).toBeInTheDocument();
+    expect(screen.getByText(/install-mac-agent\.sh/)).toHaveTextContent(
+      "bash -s -- 'https://auto-ux.example'"
+    );
+    expect(screen.getByText(/install-mac-agent\.sh/)).not.toHaveTextContent("0.3.0");
+    await waitFor(() => expect(onReadyChange).toHaveBeenCalledWith(false));
   });
 });

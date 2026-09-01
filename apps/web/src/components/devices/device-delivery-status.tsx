@@ -15,8 +15,8 @@ const labels: Record<Delivery["status"], string> = {
   queued: "任务正在等待 Mac 助手接收",
   claimed: "Mac 助手正在准备任务",
   codex_opened: "Mac 助手已打开 Codex",
-  waiting_permission: "等待同事在 Mac 上允许辅助功能；设置页面已自动打开，授权后会自动继续。",
-  prompt_sent: "Mac 已尝试发送，等待 Codex 接管",
+  waiting_permission: "旧版 Mac 助手正在等待辅助功能权限；请重新安装新版助手。",
+  prompt_sent: "任务已通过 Codex 接口发送，等待 Codex 接管",
   agent_started: "Codex 已接管任务",
   ack_timeout: "Codex 未在 60 秒内确认接管",
   failed: "Mac 助手发送失败"
@@ -24,9 +24,12 @@ const labels: Record<Delivery["status"], string> = {
 
 const errors: Record<string, string> = {
   PHONE_FILE_NOT_FOUND: "Mac 上找不到号码文件，请检查表单中的绝对路径。",
-  CLIPBOARD_FAILED: "无法写入 Mac 剪贴板。",
+  CLIPBOARD_FAILED: "旧版助手无法写入剪贴板；重新安装新版后不再使用剪贴板。",
   CODEX_OPEN_FAILED: "无法在 Mac 上打开 Codex。",
-  CODEX_SEND_FAILED: "无法自动粘贴并发送，请检查辅助功能权限。",
+  CODEX_CLI_NOT_FOUND: "未找到 Codex CLI，请升级或重新安装 Codex。",
+  CODEX_APP_SERVER_TIMEOUT: "Codex 任务接口响应超时，未确认接管前可重试。",
+  CODEX_APP_SERVER_FAILED: "Codex 任务接口拒绝了请求，请升级 Codex 后重试。",
+  CODEX_SEND_FAILED: "无法通过 Codex 任务接口发送。",
   CODEX_ACK_TIMEOUT: "Codex 未在 60 秒内确认接管。"
 };
 

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { ZodError } from "zod";
 
 import type { CurrentUser } from "../../../../../server/auth/current-user";
 import { getRequestUser } from "../../../../../server/auth/request-user";
@@ -8,7 +9,10 @@ import {
   ExecutionService,
   ExecutionServiceError
 } from "../../../../../server/executions/service";
-import { createExecutionAgentAuthenticator } from "../../../../../server/executions/agent-auth";
+import {
+  createExecutionAgentAuthenticator,
+  ExecutionAgentAuthenticationError
+} from "../../../../../server/executions/agent-auth";
 
 type RouteContext = {
   params: Promise<{ executionId: string }>;
@@ -32,14 +36,11 @@ export function createEventsHandlers(
   return {
     async POST(request: Request, routeContext: RouteContext): Promise<Response> {
       const { executionId } = await routeContext.params;
-      const user = request.headers.has("authorization")
-        ? await authenticateAgent(request, executionId)
-        : await authenticate(request);
-      if (!user) {
-        return errorResponse("UNAUTHENTICATED", 401);
-      }
-
       try {
+        const user = request.headers.has("authorization")
+          ? await authenticateAgent(request, executionId)
+          : await authenticate(request);
+        if (!user) return errorResponse("UNAUTHENTICATED", 401);
         const body = AppendExecutionEventRequestSchema.parse(
           await request.json()
         );
@@ -82,23 +83,31 @@ export function createEventsHandlers(
 }
 
 function handleError(error: unknown): Response {
+  if (error instanceof ExecutionAgentAuthenticationError) {
+    return errorResponse(error.code, 401);
+  }
   if (error instanceof ExecutionServiceError) {
     return errorResponse(error.code, error.status);
   }
-  if (
-    error instanceof SyntaxError ||
-    (typeof error === "object" &&
-      error !== null &&
-      "name" in error &&
-      error.name === "ZodError")
-  ) {
-    return errorResponse("INVALID_REQUEST", 400);
+  if (error instanceof ZodError) {
+    return errorResponse("INVALID_REQUEST", 400, error.issues.map((issue) => ({
+      path: issue.path.map(String).join("."),
+      code: issue.code,
+      message: issue.message
+    })));
+  }
+  if (error instanceof SyntaxError) {
+    return errorResponse("INVALID_REQUEST", 400, [{
+      path: "body",
+      code: "invalid_json",
+      message: "Request body is not valid JSON"
+    }]);
   }
   throw error;
 }
 
-function errorResponse(code: string, status: number): Response {
-  return NextResponse.json({ code }, { status });
+function errorResponse(code: string, status: number, details?: unknown): Response {
+  return NextResponse.json({ code, ...(details ? { details } : {}) }, { status });
 }
 
 const handlers = createEventsHandlers(createExecutionService);

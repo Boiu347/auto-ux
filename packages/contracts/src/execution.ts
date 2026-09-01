@@ -159,7 +159,23 @@ export const ExecutionEvidenceSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("platform_record"),
-      summary: z.object({ outcome: z.enum(["unavailable", "recorded", "ringing", "connected", "no_answer", "busy", "failed"]) }).strict(),
+      summary: z
+        .object({
+          outcome: z.enum([
+            "unavailable", "recorded", "ringing", "connected", "no_answer",
+            "busy", "failed", "robot_hangup_incomplete"
+          ]),
+          isRobotHangup: z.boolean().optional(),
+          completeType: z.number().int().nonnegative().optional(),
+          durationTimeLen: z.number().int().nonnegative().optional(),
+          ringingTimeLen: z.number().int().nonnegative().optional(),
+          talkingTimeLen: z.number().int().nonnegative().optional(),
+          talkingTurn: z.number().int().nonnegative().optional(),
+          sipCode: z.string().regex(/^\d{3}$/).optional(),
+          sipInfo: z.string().regex(/^[A-Za-z0-9 _-]{1,64}$/).optional(),
+          action: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).optional()
+        })
+        .strict(),
       reference: EvidenceReferenceSchema.extend({ kind: z.literal("platform_record") })
     })
     .strict(),
@@ -265,7 +281,10 @@ function authoritativeEvidenceStatus(
     if (evidence.summary.outcome === "unavailable") {
       return "unknown";
     }
-    if (evidence.summary.outcome === "failed") {
+    if (
+      evidence.summary.outcome === "failed" ||
+      evidence.summary.outcome === "robot_hangup_incomplete"
+    ) {
       return "failed";
     }
     return "succeeded";

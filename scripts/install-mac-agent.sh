@@ -11,6 +11,7 @@ AGENT_PATH="$INSTALL_DIR/mac-agent.mjs"
 LOG_DIR="$HOME/Library/Logs/AutoUX"
 PLIST_PATH="$HOME/Library/LaunchAgents/com.auto-ux.mac-agent.plist"
 LABEL="com.auto-ux.mac-agent"
+CONFIG_PATH="${AUTO_UX_AGENT_CONFIG:-$HOME/.config/auto-ux/agent.json}"
 
 if [[ $(uname -s) != "Darwin" ]]; then
   echo "当前安装器只支持 macOS。" >&2
@@ -21,12 +22,28 @@ if [[ ! $API_BASE_URL =~ ^https://[^[:space:]]+$ ]] \
   echo "缺少有效的网站地址；HTTP 仅允许当前生产 IP 或本机地址。" >&2
   exit 1
 fi
-if [[ ! $PAIRING_CODE =~ ^[A-Fa-f0-9]{8}$ ]]; then
+if [[ -n $PAIRING_CODE && ! $PAIRING_CODE =~ ^[A-Fa-f0-9]{8}$ ]]; then
   echo "配对码必须是 8 位十六进制字符。" >&2
   exit 1
 fi
 if ! command -v node >/dev/null 2>&1; then
   echo "未找到 Node.js 20 或更高版本，请先安装 Node.js。" >&2
+  exit 1
+fi
+if ! command -v codex >/dev/null 2>&1; then
+  echo "未找到 Codex CLI；请先在 Codex 设置中完成命令行工具安装。" >&2
+  exit 1
+fi
+if ! codex app-server --help >/dev/null 2>&1; then
+  echo "当前 Codex 版本不支持结构化任务投递，请先升级 Codex。" >&2
+  exit 1
+fi
+if ! codex app-server daemon bootstrap >/dev/null 2>&1; then
+  echo "无法初始化 Codex 本地任务服务，请升级 Codex 后重试。" >&2
+  exit 1
+fi
+if ! codex app-server daemon start >/dev/null 2>&1; then
+  echo "无法启动 Codex 本地任务服务。" >&2
   exit 1
 fi
 
@@ -35,6 +52,23 @@ NODE_MAJOR=$($NODE_PATH -p 'Number(process.versions.node.split(".")[0])')
 if (( NODE_MAJOR < 20 )); then
   echo "Node.js 版本过低，需要 20 或更高版本。" >&2
   exit 1
+fi
+
+if [[ -z $PAIRING_CODE ]]; then
+  if [[ ! -f $CONFIG_PATH ]]; then
+    echo "未找到现有 Mac 助手配对；首次安装需要网站生成的配对码。" >&2
+    exit 1
+  fi
+  if ! "$NODE_PATH" -e '
+    const fs = require("node:fs");
+    const [path, expected] = process.argv.slice(1);
+    const config = JSON.parse(fs.readFileSync(path, "utf8"));
+    const normalize = (value) => String(value).replace(/\/+$/, "");
+    if (!config.deviceToken || normalize(config.apiBaseUrl) !== normalize(expected)) process.exit(1);
+  ' "$CONFIG_PATH" "$API_BASE_URL"; then
+    echo "现有配对不属于当前网站；请从网站重新生成配对码。" >&2
+    exit 1
+  fi
 fi
 
 download_file() {
@@ -72,8 +106,12 @@ mkdir -p "$SKILL_DIR"
 cp -R "$SKILL_SOURCE/." "$SKILL_DIR/"
 chmod 700 "$SKILL_DIR/scripts/"*.py
 
-PAIRING_CODE_UPPER=$(printf '%s' "$PAIRING_CODE" | tr '[:lower:]' '[:upper:]')
-"$NODE_PATH" "$AGENT_PATH" pair "$API_BASE_URL" "$PAIRING_CODE_UPPER"
+if [[ -n $PAIRING_CODE ]]; then
+  PAIRING_CODE_UPPER=$(printf '%s' "$PAIRING_CODE" | tr '[:lower:]' '[:upper:]')
+  "$NODE_PATH" "$AGENT_PATH" pair "$API_BASE_URL" "$PAIRING_CODE_UPPER"
+else
+  echo "已复用现有 Mac 助手配对。"
+fi
 
 xml_escape() {
   printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
@@ -107,4 +145,4 @@ launchctl kickstart -k "gui/$UID/$LABEL"
 
 echo "Auto UX Mac 助手已安装并启动。"
 echo "百度云一键配置 Skill 已安装到 Codex。"
-echo "首次自动发送时，请在 系统设置 → 隐私与安全性 → 辅助功能 中允许 Node.js 控制键盘。"
+echo "后续任务会直接发送到 Codex，不使用剪贴板，也不需要辅助功能权限。"

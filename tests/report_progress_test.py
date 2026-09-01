@@ -71,6 +71,67 @@ class ReportProgressTest(unittest.TestCase):
             payload = request.call_args.args[3]
             self.assertEqual(payload["localConfirmation"]["confirmedAt"], "2026-08-06T04:00:00.000Z")
 
+    def test_heartbeat_reclaims_only_after_a_lock_mismatch(self):
+        state = {
+            "apiBaseUrl": "https://auto-ux.example",
+            "executionId": "Execution_1",
+            "agentToken": "execution_token:" + "a" * 64,
+            "agentId": "MacCodex",
+            "sessionId": "Session_1",
+        }
+        calls = []
+
+        def request(_state, method, path, payload=None):
+            calls.append((method, path, payload))
+            if path.endswith("/agent/heartbeat"):
+                raise REPORT.ControlPlaneError(409, "EXECUTION_LOCK_MISMATCH")
+            return {"pluginSessionCount": 1}
+
+        with patch.object(REPORT, "request_json", side_effect=request):
+            REPORT.renew_agent_lock(state)
+
+        self.assertEqual(calls[0][1], "/api/executions/Execution_1/agent/heartbeat")
+        self.assertEqual(calls[1][1], "/api/executions/Execution_1/agent/claim")
+
+    def test_event_parser_rejects_non_contract_step_names(self):
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "report_progress.py", "event", "/tmp/not-read.json",
+                "numbers.import", "succeeded", "numbers_confirm",
+            ],
+        ), self.assertRaises(SystemExit):
+            REPORT.main()
+
+    def test_call_event_keeps_only_safe_diagnostics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            record_path = Path(directory) / "record.json"
+            record_path.write_text(json.dumps({"items": [{
+                "sessionId": "session-1",
+                "mobile": "138****8000",
+                "callerNum": "075****1348",
+                "contextText": "private transcript",
+                "isRobotHangup": True,
+                "talkingTimeLen": 29,
+                "talkingTurn": 2,
+                "sipCode": "200",
+                "sipInfo": "OK",
+            }]}), encoding="utf-8")
+            event = REPORT.call_record_event(
+                self.state(Path(directory) / "state.json"),
+                "failed",
+                "robot_hangup_incomplete",
+                str(record_path),
+                1,
+            )
+
+        encoded = json.dumps(event)
+        self.assertNotIn("138****8000", encoded)
+        self.assertNotIn("private transcript", encoded)
+        self.assertTrue(event["evidence"]["summary"]["isRobotHangup"])
+        self.assertEqual(event["evidence"]["summary"]["talkingTimeLen"], 29)
+
 
 if __name__ == "__main__":
     unittest.main()

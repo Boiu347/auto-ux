@@ -20,6 +20,8 @@ type PairingState =
   | { status: "expired" }
   | { status: "error"; message: string };
 
+const CURRENT_AGENT_VERSION = "0.4.0";
+
 export function MacPairingPanel({
   origin,
   onReadyChange
@@ -70,7 +72,9 @@ export function MacPairingPanel({
     };
   }, [refresh]);
 
-  const ready = pairing.status === "paired" && pairing.online;
+  const ready = pairing.status === "paired"
+    && pairing.online
+    && pairing.version === CURRENT_AGENT_VERSION;
   useEffect(() => onReadyChange(ready), [onReadyChange, ready]);
 
   const baseUrl = origin ?? (typeof window === "undefined" ? "" : publicOrigin(window.location.origin));
@@ -78,6 +82,11 @@ export function MacPairingPanel({
     if (pairing.status !== "waiting") return "";
     return `curl -fsSL '${baseUrl}/downloads/install-mac-agent.sh' | bash -s -- '${baseUrl}' '${pairing.code}'`;
   }, [baseUrl, pairing]);
+  const updateCommand = useMemo(
+    () => `curl -fsSL '${baseUrl}/downloads/install-mac-agent.sh' | bash -s -- '${baseUrl}'`,
+    [baseUrl]
+  );
+  const updateRequired = pairing.status === "paired" && pairing.version !== CURRENT_AGENT_VERSION;
 
   const createPairing = async () => {
     setPairing({ status: "loading" });
@@ -103,15 +112,24 @@ export function MacPairingPanel({
     <Card className="dashboard-panel mac-pairing-card">
       <CardHeader
         header={<Title2 as="h2">连接这台 Mac</Title2>}
-        description={<Text>只需配对一次，之后网站会把任务自动发送给本机 Codex。</Text>}
+        description={<Text>只需配对一次，之后网站会通过 Codex 接口直接创建任务，不使用剪贴板或辅助功能权限。</Text>}
       />
       {pairing.status === "paired" ? (
-        <MessageBar intent={pairing.online ? "success" : "warning"}>
+        <MessageBar intent={pairing.online && !updateRequired ? "success" : "warning"}>
           <MessageBarBody>
             <strong>{pairing.online ? "Mac 助手在线" : "Mac 助手离线"}</strong>
             {pairing.version ? ` · 版本 ${pairing.version}` : ""}
           </MessageBarBody>
         </MessageBar>
+      ) : null}
+      {updateRequired ? (
+        <div className="pairing-instructions">
+          <Text>助手需要升级到 {CURRENT_AGENT_VERSION}；升级会保留现有配对，不会申请辅助功能权限。</Text>
+          <code className="install-command">{updateCommand}</code>
+          <Button type="button" onClick={() => void navigator.clipboard.writeText(updateCommand)}>
+            复制升级命令
+          </Button>
+        </div>
       ) : null}
       {pairing.status === "waiting" ? (
         <div className="pairing-instructions">

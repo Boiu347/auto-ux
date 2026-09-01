@@ -4,7 +4,10 @@ import { z } from "zod";
 
 import type { CurrentUser } from "../../../../../server/auth/current-user";
 import { getRequestUser } from "../../../../../server/auth/request-user";
-import { createExecutionAgentAuthenticator } from "../../../../../server/executions/agent-auth";
+import {
+  createExecutionAgentAuthenticator,
+  ExecutionAgentAuthenticationError
+} from "../../../../../server/executions/agent-auth";
 
 const ActionSchema = z.enum(["publish", "import_numbers", "start_dial"]);
 const DecisionSchema = z.enum(["approved", "rejected"]);
@@ -34,7 +37,15 @@ export function createDecisionHandlers(dependencies: Dependencies) {
   return {
     async GET(request: Request, context: Context): Promise<Response> {
       const { executionId } = await context.params;
-      const { scope } = await authenticate(request, executionId);
+      let scope: Scope | null;
+      try {
+        ({ scope } = await authenticate(request, executionId));
+      } catch (error) {
+        if (error instanceof ExecutionAgentAuthenticationError) {
+          return jsonError(error.code, 401);
+        }
+        throw error;
+      }
       if (!scope) return jsonError("UNAUTHENTICATED", 401);
       const parsed = ActionSchema.safeParse(new URL(request.url).searchParams.get("action"));
       if (!parsed.success) return jsonError("INVALID_REQUEST", 400);
@@ -43,7 +54,16 @@ export function createDecisionHandlers(dependencies: Dependencies) {
     },
     async POST(request: Request, context: Context): Promise<Response> {
       const { executionId } = await context.params;
-      const { scope, source } = await authenticate(request, executionId);
+      let scope: Scope | null;
+      let source: Source;
+      try {
+        ({ scope, source } = await authenticate(request, executionId));
+      } catch (error) {
+        if (error instanceof ExecutionAgentAuthenticationError) {
+          return jsonError(error.code, 401);
+        }
+        throw error;
+      }
       if (!scope) return jsonError("UNAUTHENTICATED", 401);
       const parsed = InputSchema.safeParse(await request.json().catch(() => null));
       if (!parsed.success) return jsonError("INVALID_REQUEST", 400);

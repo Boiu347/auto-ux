@@ -7,25 +7,10 @@ import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 const POLL_INTERVAL_MS = 3_000;
-const PERMISSION_RETRY_MS = 5_000;
 const DEFAULT_CONFIG_PATH = join(homedir(), ".config", "auto-ux", "agent.json");
-const PASTE_AND_SEND_SCRIPT = [
-  'tell application "Codex" to activate',
-  'tell application "System Events"',
-  "  repeat with focusAttempt from 1 to 20",
-  '    if exists process "Codex" and frontmost of process "Codex" then exit repeat',
-  "    delay 0.1",
-  "  end repeat",
-  '  if not (exists process "Codex") or not (frontmost of process "Codex") then error "Codex did not become frontmost"',
-  '  keystroke "n" using {command down}',
-  "  delay 1.5",
-  '  keystroke "v" using {command down}',
-  "  delay 0.5",
-  "  key code 36",
-  "end tell"
-].join("\n");
+const CODEX_RPC_TIMEOUT_MS = 20_000;
 
 export async function deliverTask(task, dependencies) {
   const setStatus = dependencies.setStatus;
@@ -33,41 +18,18 @@ export async function deliverTask(task, dependencies) {
     await setStatus("failed", "PHONE_FILE_NOT_FOUND");
     return "failed";
   }
+  const workspacePath = dirname(task.phoneFilePath);
   try {
-    await dependencies.copyPrompt(task.prompt);
-  } catch {
-    await setStatus("failed", "CLIPBOARD_FAILED");
-    return "failed";
-  }
-  try {
-    await dependencies.openCodex();
+    await dependencies.openCodex(workspacePath);
   } catch {
     await setStatus("failed", "CODEX_OPEN_FAILED");
     return "failed";
   }
   await setStatus("codex_opened");
   try {
-    await dependencies.pasteAndSend();
+    await dependencies.startCodexTask(task.prompt, workspacePath);
   } catch (error) {
-    if (isAccessibilityError(error)) {
-      await setStatus("waiting_permission", "MAC_ACCESSIBILITY_REQUIRED");
-      await dependencies.requestAccessibility();
-      for (;;) {
-        await dependencies.sleep(PERMISSION_RETRY_MS);
-        try {
-          await dependencies.pasteAndSend();
-          await setStatus("prompt_sent");
-          return "prompt_sent";
-        } catch (retryError) {
-          if (!isAccessibilityError(retryError)) {
-            await setStatus("failed", "CODEX_SEND_FAILED");
-            return "failed";
-          }
-          await setStatus("waiting_permission", "MAC_ACCESSIBILITY_REQUIRED");
-        }
-      }
-    }
-    await setStatus("failed", "CODEX_SEND_FAILED");
+    await setStatus("failed", codexDeliveryErrorCode(error));
     return "failed";
   }
   await setStatus("prompt_sent");
@@ -114,11 +76,8 @@ export async function pollOnce(config, overrides = {}) {
   };
   return deliverTask(task, {
     fileExists: overrides.fileExists ?? fileExists,
-    copyPrompt: overrides.copyPrompt ?? copyPrompt,
     openCodex: overrides.openCodex ?? openCodex,
-    pasteAndSend: overrides.pasteAndSend ?? pasteAndSend,
-    requestAccessibility: overrides.requestAccessibility ?? requestAccessibility,
-    sleep: overrides.sleep ?? sleep,
+    startCodexTask: overrides.startCodexTask ?? startCodexTask,
     setStatus
   });
 }
@@ -168,38 +127,138 @@ async function fileExists(path) {
   }
 }
 
-async function copyPrompt(prompt) {
-  await runCommand("/usr/bin/pbcopy", [], prompt);
+async function openCodex(workspacePath) {
+  await runCommand(findCodexCli(), ["app", workspacePath]);
 }
 
-async function openCodex() {
-  await runCommand("/usr/bin/open", ["-a", "Codex"]);
-}
-
-async function pasteAndSend() {
-  await runCommand("/usr/bin/osascript", ["-e", PASTE_AND_SEND_SCRIPT]);
-}
-
-async function requestAccessibility() {
-  await Promise.allSettled([
-    runCommand("/usr/bin/open", [
-      "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-    ]),
-    runCommand("/usr/bin/osascript", [
-      "-e",
-      'display notification "请在辅助功能中允许 Node.js 或 osascript；授权后任务会自动继续。" with title "Auto UX 等待授权"'
-    ])
-  ]);
-}
-
-function isAccessibilityError(error) {
-  return /not allowed to send keystrokes|assistive access|not authorized|accessibility|-1743/i.test(
-    error instanceof Error ? error.message : String(error)
+export async function startCodexTask(prompt, workspacePath, options = {}) {
+  const command = options.codexPath ?? findCodexCli();
+  await (options.ensureDaemon ?? ensureCodexDaemon)(command);
+  const child = (options.spawnProcess ?? spawn)(
+    command,
+    ["app-server", "proxy"],
+    { shell: false, stdio: ["pipe", "pipe", "pipe"] }
   );
+  const rpc = createJsonRpcClient(child, options.timeoutMs ?? CODEX_RPC_TIMEOUT_MS);
+  try {
+    await rpc.request("initialize", {
+      clientInfo: {
+        name: "auto-ux-mac-agent",
+        title: "Auto UX Mac Agent",
+        version: VERSION
+      }
+    });
+    rpc.notify("initialized");
+    const started = await rpc.request("thread/start", {
+      cwd: workspacePath,
+      approvalPolicy: "on-request",
+      serviceName: "auto-ux",
+      threadSource: "auto-ux-mac-agent"
+    });
+    const threadId = started?.thread?.id;
+    if (typeof threadId !== "string" || !threadId) {
+      throw new Error("CODEX_INVALID_RESPONSE");
+    }
+    await rpc.request("turn/start", {
+      threadId,
+      input: [{ type: "text", text: prompt }]
+    });
+    rpc.detach();
+    return { threadId };
+  } catch (error) {
+    rpc.close();
+    throw error;
+  }
 }
 
-function sleep(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+function createJsonRpcClient(child, timeoutMs) {
+  let nextId = 1;
+  let buffer = "";
+  const pending = new Map();
+  const failAll = (error) => {
+    for (const { reject, timer } of pending.values()) {
+      clearTimeout(timer);
+      reject(error);
+    }
+    pending.clear();
+  };
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    buffer += chunk;
+    for (;;) {
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) break;
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (!line) continue;
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (message.id === undefined) {
+        continue;
+      }
+      const entry = pending.get(String(message.id));
+      if (!entry) continue;
+      pending.delete(String(message.id));
+      clearTimeout(entry.timer);
+      if (message.error) {
+        entry.reject(new Error(`CODEX_RPC_ERROR:${message.error.code ?? "unknown"}`));
+      } else {
+        entry.resolve(message.result);
+      }
+    }
+  });
+  child.once("error", failAll);
+  child.once("close", (code) =>
+    failAll(new Error(`CODEX_APP_SERVER_EXITED:${code ?? "unknown"}`))
+  );
+  const write = (message) => child.stdin.write(`${JSON.stringify(message)}\n`);
+  return {
+    request(method, params) {
+      const id = nextId++;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(String(id));
+          reject(new Error("CODEX_RPC_TIMEOUT"));
+        }, timeoutMs);
+        pending.set(String(id), { resolve, reject, timer });
+        write({ jsonrpc: "2.0", id, method, params });
+      });
+    },
+    notify(method, params) {
+      write({ jsonrpc: "2.0", method, ...(params === undefined ? {} : { params }) });
+    },
+    detach() {
+      child.stdin.end();
+      child.stdout.resume();
+      child.stderr?.resume();
+      child.unref?.();
+    },
+    close() {
+      child.kill();
+    }
+  };
+}
+
+async function ensureCodexDaemon(command) {
+  await runCommand(command, ["app-server", "daemon", "start"]);
+}
+
+function findCodexCli() {
+  return process.env.AUTO_UX_CODEX_PATH || "codex";
+}
+
+function codexDeliveryErrorCode(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/ENOENT|not found/i.test(message)) return "CODEX_CLI_NOT_FOUND";
+  if (/CODEX_RPC_TIMEOUT/.test(message)) return "CODEX_APP_SERVER_TIMEOUT";
+  if (/CODEX_RPC_ERROR|CODEX_INVALID_RESPONSE|CODEX_APP_SERVER_EXITED/.test(message)) {
+    return "CODEX_APP_SERVER_FAILED";
+  }
+  return "CODEX_SEND_FAILED";
 }
 
 function runCommand(command, args, stdin) {

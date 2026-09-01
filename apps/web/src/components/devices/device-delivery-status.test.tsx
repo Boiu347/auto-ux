@@ -13,17 +13,18 @@ it("shows a concrete Mac delivery failure on the execution page", async () => {
   expect(await screen.findByText(/Mac 上找不到号码文件/)).toBeInTheDocument();
 });
 
-it("tells the user that the Mac is waiting for one-time Accessibility approval", async () => {
+it("tells users of the legacy helper to reinstall instead of granting Accessibility", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
     status: "waiting_permission",
     errorCode: "MAC_ACCESSIBILITY_REQUIRED",
     updatedAt: "2026-08-06T04:00:00Z"
   })));
   render(<DeviceDeliveryStatus executionId="EX-1" />);
-  expect(await screen.findByText(/等待同事在 Mac 上允许辅助功能/)).toBeInTheDocument();
+  expect(await screen.findByText(/旧版 Mac 助手正在等待辅助功能权限/)).toBeInTheDocument();
+  expect(screen.getByText(/请重新安装新版助手/)).toBeInTheDocument();
 });
 
-it("does not call a successful keystroke delivery a successful Codex handoff", async () => {
+it("does not call an unacknowledged delivery a successful Codex handoff", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
     status: "prompt_sent", errorCode: null, updatedAt: "2026-08-06T04:00:00Z", retryable: false
   })));

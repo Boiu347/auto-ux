@@ -310,10 +310,13 @@ class BaiduApiGuardTests(unittest.TestCase):
                     "platformId": 10,
                     "robotId": "R-1",
                     "robotName": "locked",
+                    "publishedPlatformId": 11,
+                    "publishedRobotId": "RP-1",
+                    "publishedVersion": 2,
                 },
             )
             with self.assertRaises(BaiduApiError) as caught:
-                assert_robot_lock(client, {"robotId": "R-1"}, str(lock))
+                assert_robot_lock(client, {"robotId": "RP-1"}, str(lock))
 
         self.assertEqual(caught.exception.code, "TARGET_MISMATCH")
         self.assertEqual(client.calls[0][1], "/api/v1/robot/query/list")
@@ -380,6 +383,11 @@ class BaiduApiGuardTests(unittest.TestCase):
                             "mobile": "13800138000",
                             "callerNum": "07567171348",
                             "contextText": "must not escape",
+                            "isRobotHangup": True,
+                            "talkingTimeLen": 29,
+                            "talkingTurn": 2,
+                            "sipCode": "200",
+                            "sipInfo": "OK",
                         },
                         {"taskId": 8, "mobile": "13900139000"},
                     ],
@@ -394,6 +402,10 @@ class BaiduApiGuardTests(unittest.TestCase):
         self.assertEqual(len(summary["items"]), 1)
         self.assertEqual(summary["items"][0]["mobile"], "138****8000")
         self.assertEqual(summary["items"][0]["callerNum"], "075****1348")
+        self.assertTrue(summary["items"][0]["isRobotHangup"])
+        self.assertEqual(summary["items"][0]["talkingTimeLen"], 29)
+        self.assertEqual(summary["items"][0]["talkingTurn"], 2)
+        self.assertEqual(summary["items"][0]["sipCode"], "200")
         self.assertNotIn("13800138000", encoded)
         self.assertNotIn("must not escape", encoded)
 

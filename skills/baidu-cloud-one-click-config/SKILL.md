@@ -52,6 +52,10 @@ python3 scripts/report_progress.py init <report-state.json> <apiBaseUrl> <execut
 
 之后每个阶段只在取得真实证据后用 `event` 上报，并至少每 45 秒运行一次 `heartbeat`。回报失败不等于业务动作失败；停止外部写入、修复回报连接后再继续，禁止补写虚假成功记录。
 
+网站已经与 Mac Agent 配对时，任务应由 Agent 通过首次安装时初始化的 Codex `app-server daemon` 结构化创建并发送。不得要求同事复制提示词、按 Command+V、授予辅助功能键盘控制权限，或把剪贴板兜底描述成“自动化”。首次配对/安装只做一次；同一网站的 Agent/Skill 升级必须复用现有设备令牌，不得要求重新生成配对码。只有本机没有配对配置或配置属于其他网站时才重新配对。日常系统权限不得替代发布、导号、拨号三个业务确认门。若 Agent 返回 `CODEX_CLI_NOT_FOUND`、`CODEX_APP_SERVER_TIMEOUT` 或 `CODEX_APP_SERVER_FAILED`，停止交付并修复/升级 Codex，不退回模拟按键。
+
+回报器只接受网站合同中的标准步骤：`source.parse`、`draft.confirm`、`environment.preflight`、`robot.create`、`field.configure`、`voice.preflight`、`publish.confirm`、`publish.verify`、`numbers.confirm`、`dial.confirm`、`dial.verify`、`complete`。禁止自造 `task.create.v3`、`numbers.import` 等步骤。每次事件前回报器会续租执行锁；只有 `EXECUTION_LOCK_MISMATCH` 时才可用同一 execution/session 重新 claim，其他认证错误必须停止。
+
 ### 2. 读取需求资料
 
 读取 [source-ingestion.md](references/source-ingestion.md)。先运行 `lark-cli whoami` 检查现有身份和令牌；仅当令牌失效或权限确实不足时才请用户授权。按资料类型读取全部内容和版本信息，并在本地记录来源 ID、标题、版本/修改时间、定位信息与内容哈希。
@@ -86,13 +90,15 @@ python3 scripts/validate_evidence.py <evidence.json>
 
 发音人 ID、开场白、音量和查询回读全部通过后才能请求发布确认。API 暂无试听接口时，明确记录“未提供 API 试听能力”，不得把 TTS 配置查询成功写成试听成功；若任务要求试听，则进入浏览器兜底并回读结果。
 
+话术必须包含确定性的挂断守卫：积极或可继续信号（如“可以”“方便”“嗯”“好”）继续当前流程；只有明确拒访、不方便或要求停止才可立即结束。机器人当前输出仍是问题或继续追问时，不得同时产生挂断事件。静默结束只按已确认的连续静默次数执行，与意图挂断分开。`delayHangUp` 单位是毫秒，2 秒必须写为 `2000`。若平台需要 `hangUpThreshold`，在校验 API 范围后可把高于 `0.65` 的保守值作为 `suggested` 起点，但必须由用户确认；这只是降低误判风险，不能声称阈值已被证明是某次误挂断的直接原因。
+
 ### 6. 三个高风险确认门
 
 每个动作都先向用户展示目标机器人、配置版本、影响和证据。用户明确确认单一动作后运行 `confirm`，执行前运行 `authorize`；授权成功即被消费。
 
 顺序必须是：
 
-1. `publish`：消费确认后调用 `baidu_robot_api.py publish --confirmation-ref ...`，再用机器人查询验证 `publishState=3`；`2` 只表示发布中，`4` 表示失败。
+1. `publish`：消费确认后调用 `baidu_robot_api.py publish --confirmation-ref ...`，再用机器人查询验证 `publishState=3`；`2` 只表示发布中，`4` 表示失败。发布回读还必须把作者态 `platformId + robotId` 与发布态 `publishedPlatformId + publishedRobotId + publishedVersion` 一起写入 target lock。
 2. `import_numbers`：先用 `phone_batch.py` 在本地解析、去重和脱敏，再展示统计；消费确认后调用 `baidu_outbound_api.py import-members --confirmation-ref ...`。完整号码不得出现在输出。
 3. `start_dial`：再次展示主叫、脱敏被叫、电话类型和提交次数；消费确认后仅调用一次 `baidu_outbound_api.py update-status`，请求体 `taskStatus=2`，并传入本次确认引用。
 
@@ -108,6 +114,14 @@ python3 scripts/report_progress.py wait-confirmation <report-state.json> <publis
 
 调用 `baidu_outbound_api.py list-details` 查询外呼明细，以 `sessionId/memberId` 和 `endType/endTypeReason` 区分待拨打、接通、无人接听、用户忙、失败和未知。回调可作为补充证据，但不得覆盖相互矛盾的查询结果。没有记录时保持 `unknown`，不得用等待固定时长后重拨来“解决”。
 
+创建外呼任务必须使用 target lock 中已回读的 `publishedRobotId`，不能使用作者态 `robotId`；创建前脚本会同时回读两种身份。核验时至少保留脱敏后的 `isRobotHangup`、`completeType`、`durationTimeLen`、`ringingTimeLen`、`talkingTimeLen`、`talkingTurn`、`sipCode/sipInfo` 和安全的 `action`。若已接通但机器人在流程完成前挂断，结果必须标为 `robot_hangup_incomplete`，不能写成“线路成功”或普通 `connected`。用回报器上报结构化记录：
+
+```bash
+python3 scripts/report_progress.py call-event <report-state.json> <succeeded|failed|unknown> <outcome> <list-details-output.json>
+```
+
+该命令只取安全诊断字段，不上传号码、通话原文或录音地址。
+
 ## 错误处理
 
 读取 [error-codes.md](references/error-codes.md)。报告时明确分开：已确认事实、合理推测和当前无法验证的信息。只给出基于当前证据的下一步，不声称未验证的成功。
@@ -120,6 +134,7 @@ python3 scripts/report_progress.py wait-confirmation <report-state.json> <publis
 - 三个高风险动作各有独立、单次消费的确认。
 - 日志和远端输出不含完整号码或飞书原文。
 - 拨号只提交一次，最终状态来自外呼记录或明确为 `unknown`。
+- 已接通但未完成流程的机器人挂断会显示为失败诊断，而不是被 SIP 200 掩盖。
 
 ## 常见错误
 
@@ -133,3 +148,5 @@ python3 scripts/report_progress.py wait-confirmation <report-state.json> <publis
 | “经理一次性批准了全部动作” | 仍在三个动作前分别确认。 |
 | “弹窗关闭，第一次大概没提交” | 标记未知并查记录，禁止再次提交。 |
 | “日志里写完整号码方便排错” | 只记录行号、脱敏号码和统计。 |
+| “提示词复制到剪贴板也算全自动” | 停止；使用已配对 Mac Agent 的 Codex app-server 结构化投递。 |
+| “SIP 200 就代表机器人流程正常” | 分开检查接通与流程完成；机器人提前挂断必须失败上报。 |

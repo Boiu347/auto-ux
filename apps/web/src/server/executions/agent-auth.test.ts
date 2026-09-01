@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { ExecutionAgentAuthenticator } from "./agent-auth";
+import {
+  ExecutionAgentAuthenticationError,
+  ExecutionAgentAuthenticator
+} from "./agent-auth";
 
 describe("ExecutionAgentAuthenticator", () => {
   it("authenticates an exact execution-scoped bearer token", async () => {
@@ -44,5 +47,19 @@ describe("ExecutionAgentAuthenticator", () => {
       )
     ).resolves.toBeNull();
     expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes an expired execution token from an invalid token", async () => {
+    const token = `execution_token:${"b".repeat(64)}`;
+    const authenticator = new ExecutionAgentAuthenticator(async () => "expired");
+
+    await expect(
+      authenticator.authenticate(
+        new Request("http://localhost/api/executions/EX-1/agent/heartbeat", {
+          headers: { authorization: `Bearer ${token}` }
+        }),
+        "EX-1"
+      )
+    ).rejects.toEqual(new ExecutionAgentAuthenticationError("AGENT_TOKEN_EXPIRED"));
   });
 });

@@ -32,24 +32,52 @@ def iter_dicts(value):
 
 def assert_robot_lock(client, payload: dict, lock_path: str) -> dict:
     lock = load_json_file(lock_path)
-    require_keys(lock, "executionId", "platformId", "robotId", "robotName")
-    if payload.get("robotId") != lock["robotId"]:
+    require_keys(
+        lock,
+        "executionId", "platformId", "robotId", "robotName",
+        "publishedPlatformId", "publishedRobotId", "publishedVersion",
+    )
+    if payload.get("robotId") != lock["publishedRobotId"]:
         raise BaiduApiError("TARGET_MISMATCH")
-    response = client.request(
+    authoring_response = client.request(
         "GET",
         "/api/v1/robot/query/list",
         params={"pn": 1, "ps": 10, "robotId": lock["robotId"]},
         retry_safe=True,
     )
-    matches = [
+    authoring_matches = [
         item
-        for item in iter_dicts(response.get("data"))
+        for item in iter_dicts(authoring_response.get("data"))
         if item.get("robotId") == lock["robotId"]
     ]
-    if len(matches) != 1:
+    if len(authoring_matches) != 1:
         raise BaiduApiError("TARGET_MISMATCH")
-    target = matches[0]
-    if str(target.get("id")) != str(lock["platformId"]) or target.get("robotName") != lock["robotName"]:
+    authoring = authoring_matches[0]
+    if (
+        str(authoring.get("id")) != str(lock["platformId"])
+        or authoring.get("robotName") != lock["robotName"]
+        or authoring.get("publishState") != 3
+    ):
+        raise BaiduApiError("TARGET_MISMATCH")
+    published_response = client.request(
+        "GET",
+        "/api/v1/robot/query/list",
+        params={"pn": 1, "ps": 10, "robotId": lock["publishedRobotId"]},
+        retry_safe=True,
+    )
+    published_matches = [
+        item
+        for item in iter_dicts(published_response.get("data"))
+        if item.get("robotId") == lock["publishedRobotId"]
+    ]
+    if len(published_matches) != 1:
+        raise BaiduApiError("TARGET_MISMATCH")
+    published = published_matches[0]
+    if (
+        str(published.get("id")) != str(lock["publishedPlatformId"])
+        or published.get("robotName") != lock["robotName"]
+        or str(published.get("version")) != str(lock["publishedVersion"])
+    ):
         raise BaiduApiError("TARGET_MISMATCH")
     return lock
 
@@ -95,6 +123,14 @@ def call_summary(response: dict) -> dict:
                         "endTypeReason",
                         "isAnswer",
                         "completeType",
+                        "isRobotHangup",
+                        "action",
+                        "durationTimeLen",
+                        "ringingTimeLen",
+                        "talkingTimeLen",
+                        "talkingTurn",
+                        "sipCode",
+                        "sipInfo",
                         "startTime",
                         "talkingStartTime",
                         "endTime",

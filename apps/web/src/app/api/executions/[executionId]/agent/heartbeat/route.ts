@@ -10,7 +10,10 @@ import {
   ExecutionServiceError,
   HeartbeatExecutionRequestSchema
 } from "../../../../../../server/executions/service";
-import { createExecutionAgentAuthenticator } from "../../../../../../server/executions/agent-auth";
+import {
+  createExecutionAgentAuthenticator,
+  ExecutionAgentAuthenticationError
+} from "../../../../../../server/executions/agent-auth";
 
 type RouteContext = { params: Promise<{ executionId: string }> };
 type ResolveService = (user: CurrentUser) => ExecutionService;
@@ -33,13 +36,11 @@ export function createAgentHeartbeatHandler(
     routeContext: RouteContext
   ): Promise<Response> {
     const { executionId } = await routeContext.params;
-    const user = request.headers.has("authorization")
-      ? await authenticateAgent(request, executionId)
-      : authenticate(request);
-    if (!user) {
-      return errorResponse("UNAUTHENTICATED", 401);
-    }
     try {
+      const user = request.headers.has("authorization")
+        ? await authenticateAgent(request, executionId)
+        : authenticate(request);
+      if (!user) return errorResponse("UNAUTHENTICATED", 401);
       const body = HeartbeatExecutionRequestSchema.parse(await request.json());
       await resolveService(user).heartbeatExecution(
         executionId,
@@ -54,6 +55,9 @@ export function createAgentHeartbeatHandler(
 }
 
 function handleError(error: unknown): Response {
+  if (error instanceof ExecutionAgentAuthenticationError) {
+    return errorResponse(error.code, 401);
+  }
   if (error instanceof ExecutionServiceError) {
     return errorResponse(error.code, error.status);
   }

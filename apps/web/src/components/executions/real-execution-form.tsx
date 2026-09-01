@@ -15,33 +15,22 @@ import {
 import Link from "next/link";
 import { FormEvent, useState } from "react";
 
-import { publicOrigin, publicPath } from "../../lib/public-path";
+import { publicPath } from "../../lib/public-path";
 
-import {
-  buildCodexPrompt,
-  buildStandaloneCodexPrompt
-} from "./build-codex-prompt";
+import { buildStandaloneCodexPrompt } from "./build-codex-prompt";
 
 type FormState =
   | "idle"
   | "creating"
-  | "launching"
-  | "manual_paste"
   | "queued"
-  | "launched"
   | "error";
 
 type CreatedTask = {
   executionId: string;
-  prompt: string;
 };
 
 export function RealExecutionForm({
-  bootstrap,
-  apiBaseUrl,
-  localLaunchEnabled
-  ,cloudPairingEnabled = false
-  ,pairedDeviceReady = false
+  pairedDeviceReady = false
 }: {
   bootstrap?: { userId: string; workspaceId: string };
   apiBaseUrl?: string;
@@ -53,31 +42,13 @@ export function RealExecutionForm({
   const [created, setCreated] = useState<CreatedTask>();
   const [error, setError] = useState<string>();
 
-  const launch = async (task: CreatedTask) => {
-    setState("launching");
-    const response = await fetch(publicPath("/api/local/launch"), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ prompt: task.prompt })
-    });
-    if (!response.ok) {
-      throw new Error("无法打开 Codex，任务已创建，可直接重试打开。");
-    }
-    const result = (await response.json()) as { fallback?: string };
-    setState(result.fallback === "manual_paste" ? "manual_paste" : "launched");
-  };
-
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (state === "creating" || state === "launching") {
+    if (state === "creating" || state === "queued") {
       return;
     }
     setError(undefined);
     try {
-      if (created) {
-        await launch(created);
-        return;
-      }
       const data = new FormData(event.currentTarget);
       const feishuUrls = String(data.get("feishuUrls") ?? "")
         .split(/\r?\n/)
@@ -86,139 +57,52 @@ export function RealExecutionForm({
       const requirements = String(data.get("requirements") ?? "");
       const phoneFilePath = String(data.get("phoneFilePath") ?? "");
       const robotName = String(data.get("robotName") ?? "");
-      const baseUrl = apiBaseUrl ?? publicOrigin(window.location.origin);
-
-      if (cloudPairingEnabled || pairedDeviceReady) {
-        buildStandaloneCodexPrompt({
-          feishuUrls,
-          requirements,
-          phoneFilePath,
-          robotName
-        });
-        if (!pairedDeviceReady) {
-          throw new Error("请先配对并保持 Mac 助手在线。");
-        }
-        setState("creating");
-        const response = await fetch(publicPath("/api/paired-tasks"), {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            requestId: createRequestId(),
-            feishuUrls,
-            requirements,
-            phoneFilePath,
-            robotName
-          })
-        });
-        const value = (await response.json().catch(() => ({}))) as {
-          executionId?: string;
-          message?: string;
-          code?: string;
-          diagnosticId?: string;
-        };
-        if (!response.ok || !value.executionId) {
-          throw new Error(pairedTaskErrorMessage(value, response.status));
-        }
-        setCreated({ executionId: value.executionId, prompt: "" });
-        setState("queued");
-        return;
-      }
-
-      if (!localLaunchEnabled) {
-        const standalonePrompt = buildStandaloneCodexPrompt({
-          feishuUrls,
-          requirements,
-          phoneFilePath,
-          robotName
-        });
-        await navigator.clipboard.writeText(standalonePrompt);
-        setState("manual_paste");
-        return;
-      }
-
-      buildCodexPrompt({
-        executionId: "VALIDATE",
-        agentToken: `execution_token:${"0".repeat(64)}`,
-        apiBaseUrl: baseUrl,
+      buildStandaloneCodexPrompt({
         feishuUrls,
         requirements,
         phoneFilePath,
         robotName
       });
-      if (!bootstrap) {
-        throw new Error("本地执行会话未配置。");
+      if (!pairedDeviceReady) {
+        throw new Error("请先完成一次性 Mac 配对并保持助手在线。");
       }
-
       setState("creating");
-      const session = await fetch(publicPath("/api/dev/session"), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(bootstrap)
-      });
-      if (!session.ok) {
-        throw new Error("无法建立本地会话。");
-      }
-      const inputHash = await hashInput({
-        sourceCount: feishuUrls.length,
-        requirements,
-        phoneFilePath,
-        robotName
-      });
-      const executionResponse = await fetch(publicPath("/api/executions"), {
+      const response = await fetch(publicPath("/api/paired-tasks"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          configVersion: 1,
-          mode: "real_codex",
-          sourceCount: feishuUrls.length,
-          inputHash
-        })
-      });
-      const executionPayload = (await executionResponse.json().catch(() => ({}))) as {
-        execution?: { id?: string };
-        agentToken?: string;
-      };
-      if (
-        !executionResponse.ok ||
-        !executionPayload.execution?.id ||
-        !executionPayload.agentToken
-      ) {
-        throw new Error("无法创建真实执行任务。");
-      }
-      const task = {
-        executionId: executionPayload.execution.id,
-        prompt: buildCodexPrompt({
-          executionId: executionPayload.execution.id,
-          agentToken: executionPayload.agentToken,
-          apiBaseUrl: baseUrl,
+          requestId: createRequestId(),
           feishuUrls,
           requirements,
           phoneFilePath,
           robotName
         })
+      });
+      const value = (await response.json().catch(() => ({}))) as {
+        executionId?: string;
+        message?: string;
+        code?: string;
+        diagnosticId?: string;
       };
-      setCreated(task);
-      await launch(task);
+      if (!response.ok || !value.executionId) {
+        throw new Error(pairedTaskErrorMessage(value, response.status));
+      }
+      setCreated({ executionId: value.executionId });
+      setState("queued");
     } catch (cause) {
       setError(userFacingError(cause));
       setState("error");
     }
   };
 
-  const busy = state === "creating" || state === "launching";
-  const buttonLabel = cloudPairingEnabled || pairedDeviceReady
-    ? state === "creating"
-      ? "正在发送到 Mac"
-      : "一键发送到 Mac Codex"
-    : !localLaunchEnabled
-    ? "复制任务提示词"
-    : created
-    ? state === "launching"
-      ? "正在打开 Codex"
-      : "重试打开 Codex"
-    : state === "creating"
-      ? "正在创建任务"
-      : "一键配置并打开 Codex";
+  const busy = state === "creating" || state === "queued";
+  const buttonLabel = state === "creating"
+    ? "正在发送到 Mac"
+    : state === "queued"
+      ? "任务已发送"
+      : pairedDeviceReady
+        ? "一键发送到 Mac Codex"
+        : "请先配对 Mac 助手";
 
   return (
     <Card className="dashboard-panel real-execution-card">
@@ -243,7 +127,7 @@ export function RealExecutionForm({
             <Input name="robotName" />
           </Field>
         </div>
-        <Button type="submit" appearance="primary" disabled={busy || (cloudPairingEnabled && !pairedDeviceReady)}>
+        <Button type="submit" appearance="primary" disabled={busy || !pairedDeviceReady}>
           {buttonLabel}
         </Button>
       </form>
@@ -253,26 +137,10 @@ export function RealExecutionForm({
             <MessageBarBody role="alert">{error}</MessageBarBody>
           </MessageBar>
         ) : null}
-        {state === "launched" ? (
-          <MessageBar intent="success">
-            <MessageBarBody>
-              <strong>任务已交给 Codex</strong>。请在 Codex 中检查提示词并点击发送。
-            </MessageBarBody>
-          </MessageBar>
-        ) : null}
         {state === "queued" ? (
           <MessageBar intent="success">
             <MessageBarBody>
-              <strong>任务已进入 Mac 队列</strong>。助手会自动打开 Codex、粘贴并发送任务。
-            </MessageBarBody>
-          </MessageBar>
-        ) : null}
-        {state === "manual_paste" ? (
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              {localLaunchEnabled
-                ? "Codex 已打开，提示词已复制到剪贴板。请按 Command+V 粘贴，再点击发送。"
-                : "提示词已复制。请在 Mac 上打开 Codex，按 Command+V 粘贴，再点击发送。"}
+              <strong>任务已进入 Mac 队列</strong>。助手会通过 Codex 接口直接创建并发送任务。
             </MessageBarBody>
           </MessageBar>
         ) : null}
@@ -319,14 +187,6 @@ function pairedTaskErrorMessage(
     ? `诊断码：${code}；追踪号：${diagnosticId}`
     : `诊断码：${code}`;
   return `${message}（${diagnostic}）`;
-}
-
-async function hashInput(input: Record<string, unknown>): Promise<string> {
-  const bytes = new TextEncoder().encode(JSON.stringify(input));
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return `sha256:${Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0")
-  ).join("")}`;
 }
 
 function userFacingError(cause: unknown): string {

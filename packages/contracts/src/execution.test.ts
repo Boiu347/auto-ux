@@ -135,7 +135,8 @@ describe("execution contracts", () => {
       connected: "succeeded",
       no_answer: "succeeded",
       busy: "succeeded",
-      failed: "failed"
+      failed: "failed",
+      robot_hangup_incomplete: "failed"
     } as const;
     const statuses = [
       "pending",
@@ -165,6 +166,28 @@ describe("execution contracts", () => {
         ).toBe(status === expectedStatus);
       }
     }
+  });
+
+  it("accepts safe call diagnostics without transcripts or full numbers", () => {
+    expect(ExecutionEventSchema.safeParse({
+      ...event,
+      status: "failed",
+      evidence: {
+        kind: "platform_record",
+        summary: {
+          outcome: "robot_hangup_incomplete",
+          isRobotHangup: true,
+          completeType: 3,
+          durationTimeLen: 34,
+          ringingTimeLen: 2,
+          talkingTimeLen: 29,
+          talkingTurn: 2,
+          sipCode: "200",
+          sipInfo: "OK"
+        },
+        reference: { kind: "platform_record", id: "record:0123456789abcdef" }
+      }
+    }).success).toBe(true);
   });
 
   it("enforces every field-readback result and event-status combination", () => {
