@@ -86,12 +86,18 @@ describe("Mac device API", () => {
     const handler = createNextTaskHandler({ claimNextTask });
     const response = await handler(
       new Request("https://auto-ux.example/api/devices/tasks/next", {
-        headers: { authorization: `Bearer device_token:${"d".repeat(64)}` }
+        headers: {
+          authorization: `Bearer device_token:${"d".repeat(64)}`,
+          "x-auto-ux-agent-version": "0.4.2"
+        }
       })
     );
 
     expect(response.status).toBe(204);
-    expect(claimNextTask).toHaveBeenCalledWith(`device_token:${"d".repeat(64)}`);
+    expect(claimNextTask).toHaveBeenCalledWith(
+      `device_token:${"d".repeat(64)}`,
+      "0.4.2"
+    );
   });
 
   it("rejects device polling without a device bearer token", async () => {

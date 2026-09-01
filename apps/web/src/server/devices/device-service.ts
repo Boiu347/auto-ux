@@ -55,7 +55,7 @@ export interface DeviceStore {
     | { status: "already_claimed" }
   >;
   findPairingByDeviceTokenHash(hash: string): Promise<DevicePairingRecord | null>;
-  touchDevice(pairingId: string, now: Date): Promise<void>;
+  touchDevice(input: { pairingId: string; now: Date; version?: string }): Promise<void>;
   createTask(record: DeviceTaskRecord): Promise<DeviceTaskRecord>;
   activateExecutionToken(input: {
     executionId: string;
@@ -256,12 +256,15 @@ export class DeviceService {
     });
   }
 
-  async claimNextTask(deviceToken: string): Promise<(
+  async claimNextTask(deviceToken: string, version?: string): Promise<(
     DeviceTaskRecord & { claimToken: string }
   ) | null> {
+    if (version !== undefined && !VersionPattern.test(version)) {
+      throw new Error("INVALID_AGENT_VERSION");
+    }
     const pairing = await this.requireDevicePairing(deviceToken);
     const now = this.now();
-    await this.store.touchDevice(pairing.id, now);
+    await this.store.touchDevice({ pairingId: pairing.id, now, version });
     const claimToken = `task_claim:${this.randomHex(32)}`;
     const task = await this.store.claimNextTask({
       pairingId: pairing.id,

@@ -7,7 +7,7 @@ import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const VERSION = "0.4.1";
+const VERSION = "0.4.2";
 const POLL_INTERVAL_MS = 3_000;
 const DEFAULT_CONFIG_PATH = join(homedir(), ".config", "auto-ux", "agent.json");
 const CODEX_RPC_TIMEOUT_MS = 20_000;
@@ -39,7 +39,10 @@ export async function deliverTask(task, dependencies) {
 export async function pollOnce(config, overrides = {}) {
   const request = overrides.request ?? fetch;
   const response = await request(`${config.apiBaseUrl}/api/devices/tasks/next`, {
-    headers: { authorization: `Bearer ${config.deviceToken}` }
+    headers: {
+      authorization: `Bearer ${config.deviceToken}`,
+      "x-auto-ux-agent-version": VERSION
+    }
   });
   if (response.status === 204) return "idle";
   if (!response.ok) throw new Error(`TASK_POLL_HTTP_${response.status}`);

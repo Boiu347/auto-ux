@@ -11,7 +11,8 @@ export function createNextTaskHandler(service: TaskClaimer) {
     const token = readDeviceBearerToken(request);
     if (!token) return NextResponse.json({ code: "UNAUTHENTICATED" }, { status: 401 });
     try {
-      const task = await service.claimNextTask(token);
+      const version = request.headers.get("x-auto-ux-agent-version") ?? undefined;
+      const task = await service.claimNextTask(token, version);
       return task ? NextResponse.json({ task }) : new Response(null, { status: 204 });
     } catch (error) {
       const code = error instanceof Error ? error.message : "UNAUTHENTICATED";

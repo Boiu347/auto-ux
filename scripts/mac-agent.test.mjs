@@ -67,7 +67,11 @@ test("deliverTask reports app-server failure without requesting Mac permissions"
 });
 
 test("pollOnce treats an empty queue as healthy idle state", async () => {
-  const request = async () => new Response(null, { status: 204 });
+  const requests = [];
+  const request = async (url, options) => {
+    requests.push([url, options]);
+    return new Response(null, { status: 204 });
+  };
   assert.equal(
     await pollOnce(
       { apiBaseUrl: "https://auto-ux.example", deviceToken: `device_token:${"b".repeat(64)}` },
@@ -75,6 +79,7 @@ test("pollOnce treats an empty queue as healthy idle state", async () => {
     ),
     "idle"
   );
+  assert.equal(requests[0][1].headers["x-auto-ux-agent-version"], "0.4.2");
 });
 
 test("startCodexTask uses the managed daemon proxy and starts one turn", async () => {

@@ -43,9 +43,16 @@ class MemoryDeviceStore implements DeviceStore {
     return this.pairings.find((pairing) => pairing.deviceTokenHash === hash) ?? null;
   }
 
-  async touchDevice(pairingId: string, now: Date): Promise<void> {
-    const pairing = this.pairings.find((candidate) => candidate.id === pairingId);
-    if (pairing) pairing.lastSeenAt = now;
+  async touchDevice(input: {
+    pairingId: string;
+    now: Date;
+    version?: string;
+  }): Promise<void> {
+    const pairing = this.pairings.find((candidate) => candidate.id === input.pairingId);
+    if (pairing) {
+      pairing.lastSeenAt = input.now;
+      if (input.version) pairing.version = input.version;
+    }
   }
 
   async createTask(record: DeviceTaskRecord) {
@@ -158,6 +165,25 @@ describe("DeviceService", () => {
         version: "0.1.0"
       })
     ).rejects.toThrow("PAIRING_ALREADY_CLAIMED");
+  });
+
+  it("updates the paired Agent version from an authenticated poll", async () => {
+    const fixture = service();
+    const created = await fixture.service.createPairing();
+    const claimed = await fixture.service.claimPairing({
+      code: created.code,
+      agentId: "MacAgent_1",
+      version: "0.1.0"
+    });
+
+    await expect(fixture.service.claimNextTask(claimed.deviceToken, "0.4.2"))
+      .resolves.toBeNull();
+    expect(await fixture.service.getBrowserPairing(created.browserToken)).toMatchObject({
+      version: "0.4.2",
+      online: true
+    });
+    await expect(fixture.service.claimNextTask(claimed.deviceToken, "bad version"))
+      .rejects.toThrow("INVALID_AGENT_VERSION");
   });
 
   it("queues idempotently and leases a task to the paired Mac", async () => {

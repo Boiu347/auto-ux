@@ -96,16 +96,26 @@ export class PrismaDeviceStore implements DeviceStore {
     return prisma.devicePairing.findUnique({ where: { deviceTokenHash: hash } });
   }
 
-  async touchDevice(pairingId: string, now: Date): Promise<void> {
+  async touchDevice(input: {
+    pairingId: string;
+    now: Date;
+    version?: string;
+  }): Promise<void> {
     await prisma.$transaction(async (transaction) => {
       const pairing = await transaction.devicePairing.update({
-        where: { id: pairingId },
-        data: { lastSeenAt: now }
+        where: { id: input.pairingId },
+        data: {
+          lastSeenAt: input.now,
+          ...(input.version ? { version: input.version } : {})
+        }
       });
       if (pairing.agentId) {
         await transaction.localAgent.updateMany({
           where: { id: pairing.agentId, workspaceId: pairing.workspaceId },
-          data: { lastHeartbeatAt: now }
+          data: {
+            lastHeartbeatAt: input.now,
+            ...(input.version ? { version: input.version } : {})
+          }
         });
       }
     });
