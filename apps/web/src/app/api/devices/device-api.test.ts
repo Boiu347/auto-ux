@@ -7,15 +7,19 @@ import { createNextTaskHandler } from "./tasks/next/route";
 import { createDeviceTaskStatusHandler } from "./tasks/[taskId]/route";
 
 describe("Mac device API", () => {
+  const scope = { userId: "User_1", workspaceId: "Workspace_1" };
+
   it("creates a pairing and stores the browser secret only in an HttpOnly cookie", async () => {
-    const handlers = createPairingHandlers({
-      createPairing: vi.fn().mockResolvedValue({
+    const createPairing = vi.fn().mockResolvedValue({
         pairingId: "Pairing_1",
         code: "A1B2C3D4",
         browserToken: `browser_token:${"a".repeat(64)}`,
         expiresAt: "2026-08-06T04:10:00.000Z"
-      })
-    });
+      });
+    const handlers = createPairingHandlers(
+      { createPairing },
+      vi.fn().mockResolvedValue(scope)
+    );
     const response = await handlers.POST(
       new Request("https://auto-ux.example/api/pairings", { method: "POST" })
     );
@@ -31,6 +35,7 @@ describe("Mac device API", () => {
     );
     expect(response.headers.get("set-cookie")).toContain("HttpOnly");
     expect(response.headers.get("set-cookie")).toContain("Secure");
+    expect(createPairing).toHaveBeenCalledWith(scope);
   });
 
   it("reads the current pairing from the browser cookie", async () => {
@@ -42,7 +47,10 @@ describe("Mac device API", () => {
       online: true,
       lastSeenAt: "2026-08-06T04:00:00.000Z"
     });
-    const handler = createCurrentPairingHandler({ getBrowserPairing });
+    const handler = createCurrentPairingHandler(
+      { getBrowserPairing },
+      vi.fn().mockResolvedValue(scope)
+    );
     const response = await handler(
       new Request("https://auto-ux.example/api/pairings/current", {
         headers: { cookie: `paired_browser=browser_token:${"b".repeat(64)}` }
@@ -51,9 +59,24 @@ describe("Mac device API", () => {
 
     expect(response.status).toBe(200);
     expect(getBrowserPairing).toHaveBeenCalledWith(
-      `browser_token:${"b".repeat(64)}`
+      `browser_token:${"b".repeat(64)}`,
+      scope
     );
     expect((await response.json()).status).toBe("paired");
+  });
+
+  it("requires a signed-in user before creating a pairing", async () => {
+    const createPairing = vi.fn();
+    const handlers = createPairingHandlers(
+      { createPairing },
+      vi.fn().mockResolvedValue(null)
+    );
+    const response = await handlers.POST(
+      new Request("https://auto-ux.example/api/pairings", { method: "POST" })
+    );
+
+    expect(response.status).toBe(401);
+    expect(createPairing).not.toHaveBeenCalled();
   });
 
   it("lets the Mac claim a one-time code", async () => {

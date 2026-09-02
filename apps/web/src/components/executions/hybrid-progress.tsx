@@ -7,17 +7,36 @@ import type {
 } from "@app/contracts";
 import {
   Button,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
   FluentProvider,
   MessageBar,
   MessageBarBody,
   Skeleton,
   SkeletonItem,
   Text,
+  Toast,
+  ToastBody,
+  Toaster,
+  ToastTitle,
   Title1,
+  useId,
+  useToastController,
   webDarkTheme,
   webLightTheme
 } from "@fluentui/react-components";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 
 import { publicPath } from "../../lib/public-path";
 import { ConfirmationPanel } from "./confirmation-panel";
@@ -299,6 +318,8 @@ export function HybridProgress({
     );
   }
 
+  const confirmationRequired = isConfirmationRequired(execution, currentEvent);
+
   return (
     <FluentProvider theme={providerTheme} className="dashboard-provider">
       <main className="dashboard-shell">
@@ -309,6 +330,33 @@ export function HybridProgress({
           </div>
           <ConnectionStatus state={connection} />
         </header>
+
+        <CurrentStageBar execution={execution} event={currentEvent} />
+
+        <ProgressNotifications
+          execution={execution}
+          event={currentEvent}
+          confirmationContent={
+            confirmationRequired ? ((onResolved) => (
+              execution.mode === "real_codex" ? (
+                <RemoteConfirmationPanel
+                  execution={execution}
+                  event={currentEvent}
+                  onResolved={onResolved}
+                />
+              ) : (
+                <ConfirmationPanel
+                  key={`${execution.id}:${execution.configVersion}:${execution.phase}:${execution.status}`}
+                  execution={execution}
+                  event={currentEvent}
+                  bridge={bridge}
+                  refreshSummary={refreshSummary}
+                  onResolved={onResolved}
+                />
+              )
+            )) : undefined
+          }
+        />
 
         <div className="dashboard-layout">
           <PhaseRail events={events.map(({ event }) => event)} />
@@ -327,7 +375,12 @@ export function HybridProgress({
               event={currentEvent}
               lastCheckpoint={lastCheckpoint}
             />
-            {execution.mode === "real_codex" ? (
+            {confirmationRequired ? (
+              <section className="dashboard-panel confirmation-attention" aria-live="polite">
+                <Text weight="semibold">此步骤需要立即处理</Text>
+                <Text>确认窗口已打开。关闭或切换页面后，重新载入任务可再次处理。</Text>
+              </section>
+            ) : execution.mode === "real_codex" ? (
               <RemoteConfirmationPanel execution={execution} event={currentEvent} />
             ) : (
               <ConfirmationPanel
@@ -357,10 +410,12 @@ const remoteConfirmationByPhase: Partial<Record<ExecutionPhase, {
 
 function RemoteConfirmationPanel({
   execution,
-  event
+  event,
+  onResolved
 }: {
   execution: ExecutionSummary;
   event?: ExecutionEvent;
+  onResolved?: (message?: string) => void;
 }) {
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<{ action: string; message: string }>();
@@ -399,6 +454,11 @@ function RemoteConfirmationPanel({
         action: current.action,
         message: value.decision === "approved" ? "已确认，正在通知 Codex" : "已拒绝，正在通知 Codex 停止"
       });
+      onResolved?.(
+        value.decision === "approved"
+          ? "已确认，正在通知 Codex"
+          : "已拒绝，正在通知 Codex 停止"
+      );
     } catch (cause) {
       setResult({
         action: current.action,
@@ -444,21 +504,22 @@ function ConnectionStatus({ state }: { state: ConnectionState }) {
 }
 
 const phases: Array<{
+  phase: ExecutionPhase;
   stepId: ExecutionEvent["stepId"];
   label: string;
 }> = [
-  { stepId: "source.parse", label: "解析配置来源" },
-  { stepId: "draft.confirm", label: "确认配置草案" },
-  { stepId: "environment.preflight", label: "环境预检" },
-  { stepId: "robot.create", label: "创建外呼机器人" },
-  { stepId: "field.configure", label: "写入机器人配置" },
-  { stepId: "voice.preflight", label: "检查语音能力" },
-  { stepId: "publish.confirm", label: "确认发布配置" },
-  { stepId: "publish.verify", label: "核验发布结果" },
-  { stepId: "numbers.confirm", label: "确认导入号码" },
-  { stepId: "dial.confirm", label: "确认启动外呼" },
-  { stepId: "dial.verify", label: "核验外呼结果" },
-  { stepId: "complete", label: "记录执行完成" }
+  { phase: "source_parse", stepId: "source.parse", label: "解析配置来源" },
+  { phase: "draft_confirm", stepId: "draft.confirm", label: "确认配置草案" },
+  { phase: "environment_preflight", stepId: "environment.preflight", label: "环境预检" },
+  { phase: "robot_create", stepId: "robot.create", label: "创建外呼机器人" },
+  { phase: "field_configure", stepId: "field.configure", label: "写入机器人配置" },
+  { phase: "voice_preflight", stepId: "voice.preflight", label: "检查语音能力" },
+  { phase: "publish_confirm", stepId: "publish.confirm", label: "确认发布配置" },
+  { phase: "publish_verify", stepId: "publish.verify", label: "核验发布结果" },
+  { phase: "numbers_confirm", stepId: "numbers.confirm", label: "确认导入号码" },
+  { phase: "dial_confirm", stepId: "dial.confirm", label: "确认启动外呼" },
+  { phase: "call_verify", stepId: "dial.verify", label: "核验外呼结果" },
+  { phase: "complete", stepId: "complete", label: "记录执行完成" }
 ];
 
 function PhaseRail({ events }: { events: ExecutionEvent[] }) {
@@ -478,10 +539,12 @@ function PhaseRail({ events }: { events: ExecutionEvent[] }) {
       <ol>
         {phases.map((phase) => {
           const event = latestByStep.get(phase.stepId);
+          const isCurrent = events.at(-1)?.stepId === phase.stepId;
           return (
             <li
               key={phase.stepId}
-              className={event ? `phase-${event.status}` : "phase-unobserved"}
+              aria-current={isCurrent ? "step" : undefined}
+              className={`${event ? `phase-${event.status}` : "phase-unobserved"}${isCurrent ? " phase-current" : ""}`}
             >
               <span>{phase.label}</span>
               <small>{event ? statusText(event.status) : "无记录"}</small>
@@ -491,6 +554,194 @@ function PhaseRail({ events }: { events: ExecutionEvent[] }) {
       </ol>
     </nav>
   );
+}
+
+function CurrentStageBar({
+  execution,
+  event
+}: {
+  execution: ExecutionSummary;
+  event?: ExecutionEvent;
+}) {
+  const index = Math.max(
+    0,
+    phases.findIndex((item) => item.phase === execution.phase)
+  );
+  const phase = phases[index] ?? phases[0]!;
+  const status = event?.status ?? execution.status;
+  return (
+    <section className={`current-stage-bar current-stage-${status}`} aria-live="polite">
+      <div>
+        <Text size={200} weight="semibold">当前进度</Text>
+        <Text as="h2" size={500} weight="semibold">{phase.label}</Text>
+      </div>
+      <div className="current-stage-count" aria-label={`第 ${index + 1} 步，共 ${phases.length} 步`}>
+        <strong>{index + 1}</strong>
+        <span>/ {phases.length} 步</span>
+      </div>
+      <div className="current-stage-status">
+        <Text weight="semibold">{statusText(status)}</Text>
+        <Text size={200}>任务状态已同步</Text>
+      </div>
+    </section>
+  );
+}
+
+function ProgressNotifications({
+  execution,
+  event,
+  confirmationContent
+}: {
+  execution: ExecutionSummary;
+  event?: ExecutionEvent;
+  confirmationContent?: (onResolved: (message?: string) => void) => ReactNode;
+}) {
+  const toasterId = useId("execution-stage-notifications");
+  const { dispatchToast } = useToastController(toasterId);
+  const currentKey = event ? eventKey(event) : null;
+  const lastNotified = useRef(currentKey);
+  const critical = criticalNotice(execution, event);
+  const criticalKey = critical
+    ? `${critical.kind}:${execution.phase}:${event ? eventKey(event) : execution.updatedAt}`
+    : null;
+
+  useEffect(() => {
+    if (!currentKey || lastNotified.current === currentKey) return;
+    lastNotified.current = currentKey;
+    if (critical) return;
+    const phase = phases.find((item) => item.stepId === event?.stepId);
+    dispatchToast(
+      <Toast>
+        <ToastTitle>{phase?.label ?? "任务进度已更新"}</ToastTitle>
+        <ToastBody>{event ? statusText(event.status) : "状态已更新"}</ToastBody>
+      </Toast>,
+      {
+        intent: event?.status === "succeeded" ? "success" : "info",
+        timeout: 8_000
+      }
+    );
+  }, [critical, currentKey, dispatchToast, event]);
+
+  return (
+    <>
+      <Toaster toasterId={toasterId} position="top-end" pauseOnHover />
+      {critical && criticalKey ? (
+        <CriticalStageDialog
+          key={criticalKey}
+          critical={critical}
+          confirmationContent={confirmationContent}
+          onResolved={(message) => {
+            dispatchToast(
+              <Toast>
+                <ToastTitle>确认已提交</ToastTitle>
+                <ToastBody>{message ?? "正在通知执行端继续处理"}</ToastBody>
+              </Toast>,
+              { intent: "success", timeout: 8_000 }
+            );
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function CriticalStageDialog({
+  critical,
+  confirmationContent,
+  onResolved
+}: {
+  critical: NonNullable<ReturnType<typeof criticalNotice>>;
+  confirmationContent?: (onResolved: (message?: string) => void) => ReactNode;
+  onResolved: (message?: string) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <Dialog
+      modalType="alert"
+      open={open}
+      onOpenChange={(_, data) => {
+        if (!critical.requiresDecision) setOpen(data.open);
+      }}
+    >
+      <DialogSurface className="critical-stage-dialog">
+        <DialogBody>
+          <DialogTitle>{critical.title}</DialogTitle>
+          <DialogContent>
+            <Text>{critical.detail}</Text>
+            {critical.requiresDecision
+              ? confirmationContent?.((message) => {
+                  setOpen(false);
+                  onResolved(message);
+                })
+              : null}
+          </DialogContent>
+          {!critical.requiresDecision ? (
+            <DialogActions>
+              <Button appearance="primary" onClick={() => setOpen(false)}>
+                我知道了
+              </Button>
+            </DialogActions>
+          ) : null}
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+function isConfirmationRequired(
+  execution: ExecutionSummary,
+  event?: ExecutionEvent
+): boolean {
+  return Boolean(
+    execution.status === "waiting_confirmation" &&
+      event?.status === "waiting_confirmation" &&
+      remoteConfirmationByPhase[execution.phase]
+  );
+}
+
+function criticalNotice(
+  execution: ExecutionSummary,
+  event?: ExecutionEvent
+): {
+  kind: "confirmation" | "failure" | "manual";
+  title: string;
+  detail: string;
+  requiresDecision: boolean;
+} | null {
+  const gate = remoteConfirmationByPhase[execution.phase];
+  if (isConfirmationRequired(execution, event) && gate) {
+    return {
+      kind: "confirmation",
+      title: gate.approve,
+      detail: "这是高风险动作。请确认或拒绝，本次决定只对当前步骤生效。",
+      requiresDecision: true
+    };
+  }
+  if (execution.status === "failed" || event?.status === "failed") {
+    return {
+      kind: "failure",
+      title: "任务执行失败",
+      detail: event?.errorCode
+        ? `错误代码：${event.errorCode}`
+        : "请查看当前动作和证据后再决定如何处理。",
+      requiresDecision: false
+    };
+  }
+  if (
+    execution.status === "unknown" ||
+    event?.status === "unknown" ||
+    (event && ["rebind_page", "reauthenticate", "inspect_call_record", "retry_preflight"].includes(event.nextAction))
+  ) {
+    return {
+      kind: "manual",
+      title: "需要人工处理",
+      detail: event?.nextAction
+        ? `下一动作：${event.nextAction}`
+        : "当前状态无法自动确认，请检查执行证据。",
+      requiresDecision: false
+    };
+  }
+  return null;
 }
 
 function statusText(status: ExecutionStatus): string {

@@ -4,10 +4,9 @@ auto UX 是百度云外呼机器人“一键配置”的网站雏形。用户填
 
 ## 当前范围
 
-当前提供两种明确区分的使用方式：
+当前网站通过一次配对的 Mac Agent 把结构化任务直接投递到 Codex `app-server daemon`。日常使用不经过剪贴板、模拟按键或辅助功能权限；同一网站升级 Agent 与 Skill 时复用现有设备令牌，不要求重新配对。
 
-- **Mac 本地模式**：创建 `real_codex` 执行，生成 24 小时 Agent 令牌，通过 `pbcopy` 和 `open -a Codex` 打开并粘贴任务；网站接收真实进度事件。
-- **云端雏形模式**：Railway 等云端环境无法直接打开访问者 Mac 上的应用，因此只在浏览器复制独立任务提示词。用户手动打开 Codex 粘贴，仍使用同一个 Skill 完成任务。
+飞书身份用于跨设备保存表单草稿和任务历史，Mac 配对仅负责把任务交给正确设备。普通阶段变化会显示 Toast；发布、导号、拨号、失败和需要人工处理的状态会显示阻塞弹窗。
 
 仓库包含 `skills/baidu-cloud-one-click-config`。真实百度操作由 Codex 和该 Skill 执行，不由网站服务器执行。发布、导入号码、开始外呼仍需在 Codex 中分别确认。页面或进度记录不能证明百度平台成功，最终结果必须由平台回读证据确认。
 
@@ -35,7 +34,7 @@ pnpm build
 pnpm start
 ```
 
-打开 [http://localhost:3000](http://localhost:3000)。生产启动和 Railway 默认展示云端雏形模式，提交后复制任务提示词。
+打开 [http://localhost:3000](http://localhost:3000)。本地开发适配器可用于界面和流程验证；生产任务必须通过已配对 Mac Agent 结构化投递。
 
 ### Mac 本地完整模式
 
@@ -67,11 +66,18 @@ pnpm dev:down
 | --- | --- |
 | `DATABASE_URL` | 本地 `control_plane` PostgreSQL 连接 |
 | `PORT` | `3100` |
+| `AUTO_UX_POSTGRES_PORT` | 本地 Compose PostgreSQL 映射端口；E2E 默认使用隔离端口 `55433` |
 | `DEV_USER_ID` | `U-1`，演示用户边界 |
 | `DEV_WORKSPACE_ID` | `W-1`，演示工作区边界 |
 | `DEV_SESSION_SECRET` | 本地 HttpOnly 会话签名密钥，至少 32 字符 |
+| `AUTH_SESSION_SECRET` | 飞书登录后的本站 HttpOnly 会话签名密钥，至少 32 字符，不能与其他密钥复用 |
+| `AUTHZ_ASSERTION_SECRET` | NX 中央飞书登录为 `auto-ux` 派生的断言校验密钥，仅保存在生产服务端 |
+| `AUTHZ_PROJECT_ID` | 中央登录断言绑定的项目 ID，生产固定为 `auto-ux` |
+| `FEISHU_APP_ID` | 飞书开放平台应用 App ID |
+| `FEISHU_APP_SECRET` | 飞书开放平台应用 App Secret，仅保存在服务端环境变量 |
+| `FEISHU_OAUTH_REDIRECT_URI` | 飞书安全设置中登记的精确回调 URL；生产必须使用 HTTPS |
 | `AUTO_UX_RUNTIME_DIR` | 运行时 PID、演示执行 ID 和日志目录 |
-| `AUTO_UX_LOCAL_CODEX_LAUNCH` | 本地设为 `1` 时允许服务器调用 Mac 的 `pbcopy`、`open` 和固定 AppleScript；生产环境始终忽略 |
+| `AUTO_UX_LOCAL_CODEX_LAUNCH` | 本地开发适配器开关；生产环境始终忽略，生产任务只通过 Mac Agent 投递 |
 | `AUTO_UX_PUBLIC_BASE_URL` | Codex 网站回报使用的完整外部地址；反向代理部署必须包含公开路径，例如 `http://118.196.147.13/auto-ux` |
 
 ## NX Server 部署
@@ -84,7 +90,11 @@ http://118.196.147.13/auto-ux/
 
 生产镜像同时运行 Next.js 和仅监听容器回环地址的 PostgreSQL。数据库文件保存在 NX 平台声明的 `data/` 持久化目录中，代码发布不会覆盖业务数据，也不需要单独配置 `DATABASE_URL`。容器停止时会对 PostgreSQL 执行快速、安全关闭。
 
-生产页面使用 Mac 配对令牌识别用户和工作区。每位同事应分别完成配对；服务端继续按 `userId + workspaceId` 隔离任务、确认和审计记录。公网入口本身不授予任务数据访问权限。
+生产页面优先使用 NX 中央飞书登录签发的项目级断言识别用户；独立部署也支持本站飞书 OAuth。Mac 配对令牌只负责设备投递，不授予任务数据访问权限。服务端继续按 `userId + workspaceId` 隔离任务、确认和审计记录。中央登录首次上线时，只有同时具备有效中央身份和原浏览器配对令牌，且旧作用域从未绑定过飞书身份，才会原地认领旧作用域以保留历史和设备配对。
+
+独立 OAuth 登录要求 HTTPS，且飞书开放平台的安全设置必须预先登记与 `FEISHU_OAUTH_REDIRECT_URI` 完全一致的回调地址。NX 托管生产入口由中央登录完成认证，并在反向代理层移除外部传入的断言头后重新签发项目级断言。
+
+中央登录反向代理必须为机器调用保留窄范围例外：`GET /api/health`、`POST /api/devices/pair`，以及携带格式正确的 `device_token` 或 `execution_token` Bearer 的 `/api/*` 请求直接交给应用。应用仍会查询令牌哈希、作用域和有效期；其他页面与 API 必须经过中央飞书登录。生产验收必须同时测试匿名页面跳转、伪造断言被移除、无效 Bearer 返回 401、真实 Mac Agent 心跳和网站历史读取。
 
 仓库中的 `.gitlab-ci.yml`、`Dockerfile`、`docker-entrypoint.sh` 和 `monitor.yaml` 是部署合同的一部分。GitHub 与 GitLab 应保持在同一个提交，GitLab 负责执行部署。
 

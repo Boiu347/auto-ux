@@ -117,6 +117,7 @@ class MemoryDeviceStore implements DeviceStore {
 }
 
 const now = new Date("2026-08-06T04:00:00.000Z");
+const scope = { userId: "User_1", workspaceId: "Workspace_1" };
 
 function service(store = new MemoryDeviceStore()) {
   let counter = 0;
@@ -132,12 +133,12 @@ function service(store = new MemoryDeviceStore()) {
 describe("DeviceService", () => {
   it("creates a single-use pairing and binds the current browser", async () => {
     const fixture = service();
-    const created = await fixture.service.createPairing();
+    const created = await fixture.service.createPairing(scope);
 
     expect(created.code).toMatch(/^[A-F0-9]{8}$/);
     expect(created.browserToken).toMatch(/^browser_token:[a-f0-9]{64}$/);
     expect(created.expiresAt).toBe("2026-08-06T04:10:00.000Z");
-    expect(await fixture.service.getBrowserPairing(created.browserToken)).toMatchObject({
+    expect(await fixture.service.getBrowserPairing(created.browserToken, scope)).toMatchObject({
       status: "waiting_for_mac",
       online: false
     });
@@ -145,7 +146,7 @@ describe("DeviceService", () => {
 
   it("claims a pairing once and never returns the stored device token", async () => {
     const fixture = service();
-    const created = await fixture.service.createPairing();
+    const created = await fixture.service.createPairing(scope);
     const claimed = await fixture.service.claimPairing({
       code: created.code,
       agentId: "MacAgent_1",
@@ -153,7 +154,7 @@ describe("DeviceService", () => {
     });
 
     expect(claimed.deviceToken).toMatch(/^device_token:[a-f0-9]{64}$/);
-    expect(await fixture.service.getBrowserPairing(created.browserToken)).toMatchObject({
+    expect(await fixture.service.getBrowserPairing(created.browserToken, scope)).toMatchObject({
       status: "paired",
       agentId: "MacAgent_1",
       online: true
@@ -167,9 +168,22 @@ describe("DeviceService", () => {
     ).rejects.toThrow("PAIRING_ALREADY_CLAIMED");
   });
 
+  it("does not expose a pairing to a different signed-in account", async () => {
+    const fixture = service();
+    const created = await fixture.service.createPairing(scope);
+    const otherScope = { userId: "User_2", workspaceId: "Workspace_1" };
+
+    await expect(
+      fixture.service.getBrowserPairing(created.browserToken, otherScope)
+    ).resolves.toBeNull();
+    await expect(
+      fixture.service.getBrowserScope(created.browserToken, otherScope)
+    ).rejects.toThrow("UNAUTHENTICATED");
+  });
+
   it("updates the paired Agent version from an authenticated poll", async () => {
     const fixture = service();
-    const created = await fixture.service.createPairing();
+    const created = await fixture.service.createPairing(scope);
     const claimed = await fixture.service.claimPairing({
       code: created.code,
       agentId: "MacAgent_1",
@@ -178,7 +192,7 @@ describe("DeviceService", () => {
 
     await expect(fixture.service.claimNextTask(claimed.deviceToken, "0.4.3"))
       .resolves.toBeNull();
-    expect(await fixture.service.getBrowserPairing(created.browserToken)).toMatchObject({
+    expect(await fixture.service.getBrowserPairing(created.browserToken, scope)).toMatchObject({
       version: "0.4.3",
       online: true
     });
@@ -188,7 +202,7 @@ describe("DeviceService", () => {
 
   it("queues idempotently and leases a task to the paired Mac", async () => {
     const fixture = service();
-    const created = await fixture.service.createPairing();
+    const created = await fixture.service.createPairing(scope);
     const claimed = await fixture.service.claimPairing({
       code: created.code,
       agentId: "MacAgent_1",
@@ -222,7 +236,7 @@ describe("DeviceService", () => {
 
   it("accepts a terminal task result only with the active claim token", async () => {
     const fixture = service();
-    const created = await fixture.service.createPairing();
+    const created = await fixture.service.createPairing(scope);
     const claimed = await fixture.service.claimPairing({
       code: created.code,
       agentId: "MacAgent_1",
@@ -252,7 +266,7 @@ describe("DeviceService", () => {
 
   it("keeps the execution bearer out of storage and signs it only when claimed", async () => {
     const fixture = service();
-    const created = await fixture.service.createPairing();
+    const created = await fixture.service.createPairing(scope);
     const claimed = await fixture.service.claimPairing({
       code: created.code,
       agentId: "MacAgent_1",

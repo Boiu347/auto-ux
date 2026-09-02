@@ -3,6 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPairedTaskHandler } from "./route";
 
 describe("paired task API", () => {
+  const authenticatedUser = {
+    userId: "User_1",
+    workspaceId: "Workspace_1"
+  };
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
@@ -26,6 +30,7 @@ describe("paired task API", () => {
       status: "queued"
     });
     const handler = createPairedTaskHandler({
+      getRequestUser: vi.fn().mockResolvedValue(authenticatedUser),
       getBrowserScope,
       createExecution,
       enqueueTask
@@ -58,11 +63,18 @@ describe("paired task API", () => {
       { userId: "User_1", workspaceId: "Workspace_1" },
       expect.objectContaining({ mode: "real_codex", configVersion: 1 })
     );
+    expect(getBrowserScope).toHaveBeenCalledWith(
+      `browser_token:${"b".repeat(64)}`,
+      authenticatedUser
+    );
     expect(enqueueTask).toHaveBeenCalledWith(
       `browser_token:${"b".repeat(64)}`,
       expect.objectContaining({
         executionId: "Execution_1",
+        feishuUrls: ["https://guanghe.feishu.cn/docx/ABC123"],
+        requirements: "创建一个新的回访机器人",
         phoneFilePath: "/Users/demo/phones.xlsx",
+        robotName: "八月回访",
         prompt: expect.stringContaining("$baidu-cloud-one-click-config")
       })
     );
@@ -79,6 +91,7 @@ describe("paired task API", () => {
   it("rejects an unpaired browser", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const handler = createPairedTaskHandler({
+      getRequestUser: vi.fn().mockResolvedValue(null),
       getBrowserScope: vi.fn(),
       createExecution: vi.fn(),
       enqueueTask: vi.fn()
@@ -93,10 +106,41 @@ describe("paired task API", () => {
     expect(response.status).toBe(401);
   });
 
+  it("rejects a pairing owned by another signed-in account", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubEnv("AUTO_UX_PUBLIC_BASE_URL", "https://auto-ux.example");
+    const createExecution = vi.fn();
+    const handler = createPairedTaskHandler({
+      getRequestUser: vi.fn().mockResolvedValue(authenticatedUser),
+      getBrowserScope: vi.fn().mockRejectedValue(new Error("UNAUTHENTICATED")),
+      createExecution,
+      enqueueTask: vi.fn()
+    });
+    const response = await handler(
+      new Request("https://auto-ux.example/api/paired-tasks", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          cookie: `paired_browser=browser_token:${"b".repeat(64)}`
+        },
+        body: JSON.stringify({
+          requestId: "request_1234567890abcdef",
+          feishuUrls: ["https://guanghe.feishu.cn/docx/ABC123"],
+          requirements: "创建机器人",
+          phoneFilePath: "/Users/demo/phones.xlsx"
+        })
+      })
+    );
+
+    expect(response.status).toBe(401);
+    expect(createExecution).not.toHaveBeenCalled();
+  });
+
   it("rejects a bind-only API base URL before creating an execution", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const createExecution = vi.fn();
     const handler = createPairedTaskHandler({
+      getRequestUser: vi.fn().mockResolvedValue(authenticatedUser),
       getBrowserScope: vi.fn().mockResolvedValue({
         pairingId: "Pairing_1",
         userId: "User_1",
@@ -135,6 +179,7 @@ describe("paired task API", () => {
     vi.stubEnv("NEXT_PUBLIC_BASE_PATH", "/auto-ux");
     const createExecution = vi.fn();
     const handler = createPairedTaskHandler({
+      getRequestUser: vi.fn().mockResolvedValue(authenticatedUser),
       getBrowserScope: vi.fn(),
       createExecution,
       enqueueTask: vi.fn()
@@ -181,6 +226,7 @@ describe("paired task API", () => {
     });
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const handler = createPairedTaskHandler({
+      getRequestUser: vi.fn().mockResolvedValue(authenticatedUser),
       getBrowserScope: vi.fn().mockRejectedValue(databaseError),
       createExecution: vi.fn(),
       enqueueTask: vi.fn()

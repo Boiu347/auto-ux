@@ -29,7 +29,10 @@ export type DeviceTaskRecord = {
   requestId: string;
   executionId: string;
   prompt: string;
+  feishuUrls: string[];
+  requirements: string;
   phoneFilePath: string;
+  robotName: string;
   status: DeviceTaskStatus;
   attempt: number;
   claimTokenHash: string | null;
@@ -105,7 +108,7 @@ export class DeviceService {
       options.randomHex ?? ((bytes) => randomBytes(bytes).toString("hex"));
   }
 
-  async createPairing(): Promise<{
+  async createPairing(scope: { userId: string; workspaceId: string }): Promise<{
     pairingId: string;
     code: string;
     browserToken: string;
@@ -116,8 +119,8 @@ export class DeviceService {
     const browserToken = `browser_token:${this.randomHex(32)}`;
     const record: DevicePairingRecord = {
       id: `Pairing_${this.randomHex(8)}`,
-      userId: `User_${this.randomHex(8)}`,
-      workspaceId: `Workspace_${this.randomHex(8)}`,
+      userId: scope.userId,
+      workspaceId: scope.workspaceId,
       codeHash: hashSecret(code),
       browserTokenHash: hashSecret(browserToken),
       deviceTokenHash: null,
@@ -137,7 +140,10 @@ export class DeviceService {
     };
   }
 
-  async getBrowserPairing(browserToken: string): Promise<{
+  async getBrowserPairing(
+    browserToken: string,
+    scope: { userId: string; workspaceId: string }
+  ): Promise<{
     pairingId: string;
     status: "waiting_for_mac" | "paired" | "expired";
     agentId: string | null;
@@ -150,6 +156,12 @@ export class DeviceService {
       hashSecret(browserToken)
     );
     if (!pairing) return null;
+    if (
+      pairing.userId !== scope.userId ||
+      pairing.workspaceId !== scope.workspaceId
+    ) {
+      return null;
+    }
     const now = this.now();
     const status = pairing.claimedAt
       ? "paired"
@@ -168,13 +180,23 @@ export class DeviceService {
     };
   }
 
-  async getBrowserScope(browserToken: string): Promise<{
+  async getBrowserScope(
+    browserToken: string,
+    expectedScope?: { userId: string; workspaceId: string }
+  ): Promise<{
     pairingId: string;
     userId: string;
     workspaceId: string;
     agentId: string;
   }> {
     const pairing = await this.requireBrowserPairing(browserToken);
+    if (
+      expectedScope &&
+      (pairing.userId !== expectedScope.userId ||
+        pairing.workspaceId !== expectedScope.workspaceId)
+    ) {
+      throw new Error("UNAUTHENTICATED");
+    }
     if (!pairing.claimedAt || !pairing.agentId) throw new Error("DEVICE_NOT_PAIRED");
     return {
       pairingId: pairing.id,
@@ -224,6 +246,9 @@ export class DeviceService {
       executionId: string;
       prompt: string;
       phoneFilePath: string;
+      feishuUrls?: string[];
+      requirements?: string;
+      robotName?: string;
     }
   ): Promise<DeviceTaskRecord> {
     const pairing = await this.requireBrowserPairing(browserToken);
@@ -245,7 +270,10 @@ export class DeviceService {
       requestId: input.requestId,
       executionId: input.executionId,
       prompt: input.prompt,
+      feishuUrls: input.feishuUrls ?? [],
+      requirements: input.requirements ?? "",
       phoneFilePath: input.phoneFilePath,
+      robotName: input.robotName ?? "",
       status: "queued",
       attempt: 0,
       claimTokenHash: null,

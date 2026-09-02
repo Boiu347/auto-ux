@@ -13,7 +13,7 @@ describe("home page", () => {
     const markup = renderToStaticMarkup(createElement(HomePage));
 
     expect(markup).toContain("百度云外呼一键配置");
-    expect(markup).toContain("暂无执行任务");
+    expect(markup).toContain("正在读取历史记录");
     expect(markup).toContain("发起真实配置");
     expect(markup).toContain("飞书文档链接");
     expect(markup).toContain("本地号码文件路径");
@@ -53,8 +53,9 @@ describe("home page", () => {
 
     const markup = renderToStaticMarkup(createElement(HomePage));
 
-    expect(markup).toContain("发起真实配置");
-    expect(markup).toContain("连接这台 Mac");
+    expect(markup).toContain("正在确认登录状态");
+    expect(markup).not.toContain("发起真实配置");
+    expect(markup).not.toContain("连接这台 Mac");
     expect(markup).not.toContain("创建演示任务");
   });
 });

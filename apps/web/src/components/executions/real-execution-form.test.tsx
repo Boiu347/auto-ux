@@ -49,7 +49,12 @@ describe("RealExecutionForm", () => {
     fireEvent.click(screen.getByRole("button", { name: "一键发送到 Mac Codex" }));
 
     expect(await screen.findByRole("button", { name: "任务已发送" })).toBeDisabled();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/task-workspace",
+      { method: "DELETE" }
+    );
   });
 
   it("validates fields before sending requests", async () => {
@@ -152,5 +157,56 @@ describe("RealExecutionForm", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "诊断码：AUTO_UX_PUBLIC_BASE_URL_INVALID；追踪号：diag_1234567890abcdef"
     );
+  });
+
+  it("restores a server draft for the same paired account", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    render(
+      <RealExecutionForm
+        localLaunchEnabled={false}
+        pairedDeviceReady
+        workspaceLoaded
+        initialDraft={{
+          feishuUrls: ["https://guanghe.feishu.cn/docx/RESTORED"],
+          requirements: "恢复后的补充需求",
+          phoneFilePath: "/Users/demo/restored.xlsx",
+          robotName: "恢复任务",
+          updatedAt: "2026-09-01T10:00:00.000Z"
+        }}
+      />
+    );
+
+    expect(await screen.findByDisplayValue(/RESTORED/)).toBeInTheDocument();
+    expect(screen.getByDisplayValue("恢复后的补充需求")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("/Users/demo/restored.xlsx")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("恢复任务")).toBeInTheDocument();
+    expect(screen.getByText("草稿已跨设备保存")).toBeInTheDocument();
+  });
+
+  it("saves a cross-device draft while the paired Mac is offline", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ draft: {} }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <RealExecutionForm
+        localLaunchEnabled={false}
+        pairedDeviceReady={false}
+        workspaceLoaded
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText(/补充需求/), {
+      target: { value: "离线时也保存" }
+    });
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/task-workspace",
+      expect.objectContaining({
+        method: "PUT",
+        body: expect.stringContaining("离线时也保存")
+      })
+    );
+    vi.useRealTimers();
   });
 });

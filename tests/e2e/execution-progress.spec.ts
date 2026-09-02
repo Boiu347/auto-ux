@@ -194,17 +194,34 @@ test("execution survives refresh and stops at independent confirmations", async 
     };
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "创建演示任务" }).click();
-  const executionLink = page.getByRole("link", { name: /查看任务/ });
-  const executionPath = await executionLink.getAttribute("href");
-  expect(executionPath).toMatch(/^\/executions\/execution_/);
-  const executionId = decodeURIComponent(executionPath!.split("/").at(-1)!);
-  await executionLink.click();
+  const executionId = await page.evaluate(async () => {
+    const session = await fetch("/api/dev/session", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: "U-1", workspaceId: "W-1" })
+    });
+    if (!session.ok) throw new Error(`session rejected: ${session.status}`);
+    const response = await fetch("/api/dev/demo", { method: "POST" });
+    const payload = (await response.json()) as {
+      execution?: { id?: unknown };
+    };
+    if (!response.ok || typeof payload.execution?.id !== "string") {
+      throw new Error(`demo rejected: ${response.status}`);
+    }
+    return payload.execution.id;
+  });
+  expect(executionId).toMatch(/^execution_/);
+  await page.goto(`/executions/${encodeURIComponent(executionId)}`);
 
   await expect(page.getByText("环境预检")).toBeVisible();
   await page.reload();
   await expect(page.getByText("环境预检")).toBeVisible();
   await expect(page.getByRole("button", { name: "确认发布" })).toBeVisible();
+  await expectDialogInsideViewport(page);
+  await page.screenshot({
+    path: "/private/tmp/auto-ux-progress-dialog-desktop.png",
+    fullPage: false
+  });
   await expect(
     page.getByRole("button", { name: "确认导入号码" })
   ).not.toBeVisible();
@@ -221,9 +238,18 @@ test("execution survives refresh and stops at independent confirmations", async 
   ).not.toBeVisible();
 
   await page.getByRole("button", { name: "确认导入号码" }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
   await expect(
     page.getByRole("button", { name: "确认开始外呼" })
   ).toBeVisible();
+  await expectDialogInsideViewport(page);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth)
+  ).toBeLessThanOrEqual(390);
+  await page.screenshot({
+    path: "/private/tmp/auto-ux-progress-dialog-mobile.png",
+    fullPage: false
+  });
   await expect(page.getByRole("button", { name: "确认发布" })).not.toBeVisible();
 
   await page.getByRole("button", { name: "确认开始外呼" }).click();
@@ -248,6 +274,20 @@ test("execution survives refresh and stops at independent confirmations", async 
     lastStep: "complete"
   });
 });
+
+async function expectDialogInsideViewport(
+  page: import("@playwright/test").Page
+) {
+  const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
+  const box = await dialog.boundingBox();
+  expect(box).not.toBeNull();
+  const viewport = page.viewportSize();
+  expect(viewport).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(viewport!.width);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height);
+}
 
 async function readDurableSummary(
   page: import("@playwright/test").Page,

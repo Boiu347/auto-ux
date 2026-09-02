@@ -18,7 +18,9 @@ function databaseName(label: string): string {
 }
 
 function databaseUrl(name: string): string {
-  return `postgresql://control_plane:control_plane@localhost:5432/${name}?schema=public`;
+  const host = process.env.TEST_DATABASE_HOST ?? "127.0.0.1";
+  const port = process.env.TEST_DATABASE_PORT ?? "5432";
+  return `postgresql://control_plane:control_plane@${host}:${port}/${name}?schema=public`;
 }
 
 function psql(database: string, sql: string): string {
@@ -45,8 +47,8 @@ function psql(database: string, sql: string): string {
 }
 
 function prisma(args: string[], url: string): string {
-  return execFileSync("pnpm", ["--filter", "@app/db", "exec", "prisma", ...args], {
-    cwd: repositoryRoot,
+  return execFileSync(resolve(packageRoot, "node_modules/.bin/prisma"), args, {
+    cwd: packageRoot,
     env: { ...process.env, DATABASE_URL: url },
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"]
@@ -131,7 +133,7 @@ describe.sequential("database migrations", () => {
   );
 
   it(
-    "creates durable Mac pairing, task lease, and confirmation decision storage",
+    "creates durable Mac pairing, task history, draft, and confirmation storage",
     () => {
       const name = createDatabase("mac_pairing");
       const url = databaseUrl(name);
@@ -145,10 +147,12 @@ describe.sequential("database migrations", () => {
             SELECT
               to_regclass('public."DevicePairing"') IS NOT NULL,
               to_regclass('public."DeviceTask"') IS NOT NULL,
-              to_regclass('public."ConfirmationDecision"') IS NOT NULL;
+              to_regclass('public."TaskDraft"') IS NOT NULL,
+              to_regclass('public."ConfirmationDecision"') IS NOT NULL,
+              to_regclass('public."OAuthLoginState"') IS NOT NULL;
           `
         ).trim()
-      ).toBe("t|t|t");
+      ).toBe("t|t|t|t|t");
     },
     120_000
   );

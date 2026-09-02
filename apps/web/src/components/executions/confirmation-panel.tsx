@@ -81,12 +81,14 @@ export function ConfirmationPanel({
   execution,
   event,
   bridge,
-  refreshSummary
+  refreshSummary,
+  onResolved
 }: {
   execution: ExecutionSummary;
   event?: ExecutionEvent;
   bridge: LocalAgentBridge | null;
   refreshSummary: () => Promise<ExecutionSummary | undefined>;
+  onResolved?: (message?: string) => void;
 }) {
   const [submission, setSubmission] = useState<Submission>({ state: "idle" });
   const [issuedConnectionSnapshot, setIssuedConnectionSnapshot] = useState<
@@ -274,6 +276,7 @@ export function ConfirmationPanel({
       }
       clearIssuedGrant();
       setSubmission({ state: "acknowledged" });
+      onResolved?.("本地代理已确认接收");
     } catch {
       if (
         isActiveOperation(generation) &&

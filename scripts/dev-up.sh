@@ -3,7 +3,8 @@ set -eu
 
 PROJECT_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 RUNTIME_DIR=${AUTO_UX_RUNTIME_DIR:-"$PROJECT_ROOT/.dev-runtime"}
-DATABASE_URL=${DATABASE_URL:-"postgresql://control_plane:control_plane@127.0.0.1:5432/control_plane?schema=public"}
+AUTO_UX_POSTGRES_PORT=${AUTO_UX_POSTGRES_PORT:-5432}
+DATABASE_URL=${DATABASE_URL:-"postgresql://control_plane:control_plane@127.0.0.1:$AUTO_UX_POSTGRES_PORT/control_plane?schema=public"}
 DEV_SESSION_SECRET=${DEV_SESSION_SECRET:-"local-development-secret-32-bytes"}
 DEV_USER_ID=${DEV_USER_ID:-"U-1"}
 DEV_WORKSPACE_ID=${DEV_WORKSPACE_ID:-"W-1"}
@@ -39,12 +40,12 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cd "$PROJECT_ROOT"
-docker compose up -d postgres
+AUTO_UX_POSTGRES_PORT="$AUTO_UX_POSTGRES_PORT" docker compose up -d postgres
 
 READY=0
 ATTEMPT=0
 while [ "$ATTEMPT" -lt 30 ]; do
-  if docker compose exec -T postgres pg_isready -U control_plane -d control_plane >/dev/null 2>&1; then
+  if AUTO_UX_POSTGRES_PORT="$AUTO_UX_POSTGRES_PORT" docker compose exec -T postgres pg_isready -U control_plane -d control_plane >/dev/null 2>&1; then
     READY=1
     break
   fi

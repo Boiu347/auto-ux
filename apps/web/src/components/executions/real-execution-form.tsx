@@ -13,7 +13,7 @@ import {
   Title2
 } from "@fluentui/react-components";
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { publicPath } from "../../lib/public-path";
 
@@ -29,18 +29,86 @@ type CreatedTask = {
   executionId: string;
 };
 
+export type TaskFormValues = {
+  feishuUrls: string[];
+  requirements: string;
+  phoneFilePath: string;
+  robotName: string;
+};
+
+const emptyForm: TaskFormValues = {
+  feishuUrls: [],
+  requirements: "",
+  phoneFilePath: "",
+  robotName: ""
+};
+
 export function RealExecutionForm({
-  pairedDeviceReady = false
+  pairedDeviceReady = false,
+  initialDraft,
+  workspaceLoaded = false,
+  fillRequest,
+  onTaskCreated
 }: {
   bootstrap?: { userId: string; workspaceId: string };
   apiBaseUrl?: string;
   localLaunchEnabled: boolean;
   cloudPairingEnabled?: boolean;
   pairedDeviceReady?: boolean;
+  initialDraft?: (TaskFormValues & { updatedAt: string }) | null;
+  workspaceLoaded?: boolean;
+  fillRequest?: { key: number; input: TaskFormValues };
+  onTaskCreated?: () => void | Promise<void>;
 }) {
+  const restoredValues = fillRequest?.input ?? (
+    workspaceLoaded && initialDraft
+      ? {
+          feishuUrls: initialDraft.feishuUrls,
+          requirements: initialDraft.requirements,
+          phoneFilePath: initialDraft.phoneFilePath,
+          robotName: initialDraft.robotName
+        }
+      : emptyForm
+  );
   const [state, setState] = useState<FormState>("idle");
   const [created, setCreated] = useState<CreatedTask>();
   const [error, setError] = useState<string>();
+  const [values, setValues] = useState<TaskFormValues>(restoredValues);
+  const [draftState, setDraftState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >(initialDraft && !fillRequest ? "saved" : "idle");
+  const initialized = useRef(workspaceLoaded || Boolean(fillRequest));
+  const lastSaved = useRef(JSON.stringify(restoredValues));
+
+  useEffect(() => {
+    if (!initialized.current || !workspaceLoaded) return;
+    const serialized = JSON.stringify(values);
+    if (serialized === lastSaved.current) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      setDraftState("saving");
+      void fetch(publicPath("/api/task-workspace"), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: serialized,
+        signal: controller.signal
+      })
+        .then((response) => {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          lastSaved.current = serialized;
+          setDraftState("saved");
+        })
+        .catch((cause: unknown) => {
+          if (!(cause instanceof DOMException && cause.name === "AbortError")) {
+            setDraftState("error");
+          }
+        });
+    }, 600);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [values, workspaceLoaded]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -49,14 +117,7 @@ export function RealExecutionForm({
     }
     setError(undefined);
     try {
-      const data = new FormData(event.currentTarget);
-      const feishuUrls = String(data.get("feishuUrls") ?? "")
-        .split(/\r?\n/)
-        .map((value) => value.trim())
-        .filter(Boolean);
-      const requirements = String(data.get("requirements") ?? "");
-      const phoneFilePath = String(data.get("phoneFilePath") ?? "");
-      const robotName = String(data.get("robotName") ?? "");
+      const { feishuUrls, requirements, phoneFilePath, robotName } = values;
       buildStandaloneCodexPrompt({
         feishuUrls,
         requirements,
@@ -89,6 +150,16 @@ export function RealExecutionForm({
       }
       setCreated({ executionId: value.executionId });
       setState("queued");
+      lastSaved.current = JSON.stringify(emptyForm);
+      setValues(emptyForm);
+      setDraftState("idle");
+      const deleteDraftResponse = await fetch(publicPath("/api/task-workspace"), {
+        method: "DELETE"
+      });
+      if (!deleteDraftResponse.ok) {
+        setDraftState("error");
+      }
+      await onTaskCreated?.();
     } catch (cause) {
       setError(userFacingError(cause));
       setState("error");
@@ -114,19 +185,58 @@ export function RealExecutionForm({
       />
       <form className="real-execution-form" onSubmit={submit} noValidate>
         <Field label="飞书文档链接" required hint="每行一个 HTTPS 链接">
-          <Textarea name="feishuUrls" required resize="vertical" />
+          <Textarea
+            name="feishuUrls"
+            required
+            resize="vertical"
+            value={values.feishuUrls.join("\n")}
+            onChange={(_, data) =>
+              setValues((current) => ({
+                ...current,
+                feishuUrls: data.value
+                  .split(/\r?\n/)
+                  .map((value) => value.trim())
+                  .filter(Boolean)
+              }))
+            }
+          />
         </Field>
         <Field label="补充需求" required>
-          <Textarea name="requirements" required resize="vertical" />
+          <Textarea
+            name="requirements"
+            required
+            resize="vertical"
+            value={values.requirements}
+            onChange={(_, data) =>
+              setValues((current) => ({ ...current, requirements: data.value }))
+            }
+          />
         </Field>
         <div className="real-form-row">
           <Field label="本地号码文件路径" required hint="网站不会上传或读取文件内容">
-            <Input name="phoneFilePath" required placeholder="/Users/you/Desktop/phones.xlsx" />
+            <Input
+              name="phoneFilePath"
+              required
+              placeholder="/Users/you/Desktop/phones.xlsx"
+              value={values.phoneFilePath}
+              onChange={(_, data) =>
+                setValues((current) => ({ ...current, phoneFilePath: data.value }))
+              }
+            />
           </Field>
           <Field label="机器人名称" hint="可选">
-            <Input name="robotName" />
+            <Input
+              name="robotName"
+              value={values.robotName}
+              onChange={(_, data) =>
+                setValues((current) => ({ ...current, robotName: data.value }))
+              }
+            />
           </Field>
         </div>
+        <Text className={`draft-status draft-${draftState}`} size={200} aria-live="polite">
+          {draftStatusText(draftState, workspaceLoaded)}
+        </Text>
         <Button type="submit" appearance="primary" disabled={busy || !pairedDeviceReady}>
           {buttonLabel}
         </Button>
@@ -152,6 +262,17 @@ export function RealExecutionForm({
   );
 }
 
+function draftStatusText(
+  state: "idle" | "saving" | "saved" | "error",
+  workspaceLoaded: boolean
+): string {
+  if (!workspaceLoaded) return "正在读取跨设备草稿";
+  if (state === "saving") return "正在保存草稿";
+  if (state === "saved") return "草稿已跨设备保存";
+  if (state === "error") return "草稿保存失败，请检查连接";
+  return "输入后自动保存草稿";
+}
+
 function createRequestId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   return `request_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
@@ -167,7 +288,7 @@ function pairedTaskErrorMessage(
       ? `HTTP_${status}`
       : "INVALID_RESPONSE";
   const messages: Record<string, string> = {
-    UNAUTHENTICATED: "浏览器的 Mac 配对凭证已失效，请重新配对。",
+    UNAUTHENTICATED: "登录或 Mac 配对已失效，请重新使用飞书登录后检查配对。",
     DEVICE_NOT_PAIRED: "当前浏览器尚未与 Mac 助手完成配对，请重新配对。",
     AUTO_UX_PUBLIC_BASE_URL_INVALID: "服务端公开地址配置无效，请联系管理员检查部署配置。",
     EXECUTION_TOKEN_MISSING: "任务已创建，但执行凭证生成失败，请稍后重试。",

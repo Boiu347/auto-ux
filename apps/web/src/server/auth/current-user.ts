@@ -8,8 +8,8 @@ export interface CurrentUser {
 const identifierPattern = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 
 /**
- * Development-only authentication adapter. Feishu OAuth can replace this
- * module without changing execution route handlers.
+ * Development-only authentication adapter. Production requests are handled
+ * by the Feishu session adapter in request-user.ts.
  */
 export function getCurrentUser(
   request: Request,

@@ -89,25 +89,62 @@ enum ConfirmationDecisionSource {
 }
 
 model User {
-  id             String          @id
-  createdAt      DateTime        @default(now())
-  executions     Execution[]     @relation("ExecutionUser")
-  configDrafts   ConfigDraft[]   @relation("ConfigDraftAuthor")
-  confirmations  Confirmation[]  @relation("ConfirmationUser")
-  auditEvents    AuditEvent[]    @relation("AuditActor")
-  devicePairings DevicePairing[] @relation("DevicePairingUser")
+  id              String          @id
+  feishuTenantKey String?
+  feishuUnionId   String?
+  feishuOpenId    String?
+  feishuName      String?
+  feishuAvatarUrl String?
+  createdAt       DateTime        @default(now())
+  executions      Execution[]     @relation("ExecutionUser")
+  configDrafts    ConfigDraft[]   @relation("ConfigDraftAuthor")
+  confirmations   Confirmation[]  @relation("ConfirmationUser")
+  auditEvents     AuditEvent[]    @relation("AuditActor")
+  devicePairings  DevicePairing[] @relation("DevicePairingUser")
+  taskDrafts      TaskDraft[]     @relation("TaskDraftUser")
+
+  @@unique([feishuTenantKey, feishuUnionId])
+  @@unique([feishuTenantKey, feishuOpenId])
 }
 
 model Workspace {
-  id             String          @id
-  createdAt      DateTime        @default(now())
-  localAgents    LocalAgent[]
-  configDrafts   ConfigDraft[]
-  executions     Execution[]
-  confirmations  Confirmation[]
-  robotBindings  RobotBinding[]
-  auditEvents    AuditEvent[]
-  devicePairings DevicePairing[]
+  id              String          @id
+  feishuTenantKey String?         @unique
+  createdAt       DateTime        @default(now())
+  localAgents     LocalAgent[]
+  configDrafts    ConfigDraft[]
+  executions      Execution[]
+  confirmations   Confirmation[]
+  robotBindings   RobotBinding[]
+  auditEvents     AuditEvent[]
+  devicePairings  DevicePairing[]
+  taskDrafts      TaskDraft[]
+}
+
+model OAuthLoginState {
+  id         String    @id @default(cuid())
+  stateHash  String    @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([expiresAt])
+}
+
+model TaskDraft {
+  userId        String
+  workspaceId   String
+  feishuUrls    Json      @default("[]")
+  requirements  String    @default("")
+  phoneFilePath String    @default("")
+  robotName     String    @default("")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  user          User      @relation("TaskDraftUser", fields: [userId], references: [id], onDelete: Cascade)
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@id([userId, workspaceId])
+  @@index([workspaceId, updatedAt])
 }
 
 model LocalAgent {
@@ -271,7 +308,10 @@ model DeviceTask {
   requestId      String
   executionId    String           @unique
   prompt         String
+  feishuUrls     Json             @default("[]")
+  requirements   String           @default("")
   phoneFilePath  String
+  robotName      String           @default("")
   status         DeviceTaskStatus @default(queued)
   attempt        Int              @default(0)
   claimTokenHash String?

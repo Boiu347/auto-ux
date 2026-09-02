@@ -6,6 +6,7 @@ import { z } from "zod";
 import { buildCodexPrompt } from "../../../components/executions/build-codex-prompt";
 import { publicOrigin } from "../../../lib/public-path";
 import type { CurrentUser } from "../../../server/auth/current-user";
+import { getRequestUser } from "../../../server/auth/request-user";
 import { ExecutionTokenPlaceholder, type DeviceService, type DeviceTaskRecord } from "../../../server/devices/device-service";
 import { readPairedBrowserToken } from "../../../server/devices/device-http";
 import { deviceService } from "../../../server/devices/device-runtime";
@@ -37,14 +38,23 @@ function safeCauseCode(error: unknown): string | null {
 }
 
 type Dependencies = {
-  getBrowserScope(token: string): Promise<Scope>;
+  getRequestUser(request: Request): Promise<CurrentUser | null>;
+  getBrowserScope(token: string, expectedScope: CurrentUser): Promise<Scope>;
   createExecution(
     scope: CurrentUser,
     input: { configVersion: number; mode: "real_codex"; sourceCount: number; inputHash: string }
   ): Promise<{ execution: { id: string }; agentToken?: string }>;
   enqueueTask(
     token: string,
-    input: { requestId: string; executionId: string; prompt: string; phoneFilePath: string }
+    input: {
+      requestId: string;
+      executionId: string;
+      prompt: string;
+      phoneFilePath: string;
+      feishuUrls: string[];
+      requirements: string;
+      robotName: string;
+    }
   ): Promise<Pick<DeviceTaskRecord, "id" | "status">>;
 };
 
@@ -84,10 +94,12 @@ export function createPairedTaskHandler(dependencies: Dependencies) {
     let executionId: string | null = null;
     try {
       if (!browserToken) throw new Error("UNAUTHENTICATED");
+      const currentUser = await dependencies.getRequestUser(request);
+      if (!currentUser) throw new Error("UNAUTHENTICATED");
       const input = TaskInputSchema.parse(await request.json());
       requestId = input.requestId;
       const apiBaseUrl = resolvePublicApiBaseUrl(request.url);
-      const paired = await dependencies.getBrowserScope(browserToken);
+      const paired = await dependencies.getBrowserScope(browserToken, currentUser);
       const scope = { userId: paired.userId, workspaceId: paired.workspaceId };
       const inputHash = `sha256:${createHash("sha256")
         .update(JSON.stringify(input))
@@ -103,7 +115,10 @@ export function createPairedTaskHandler(dependencies: Dependencies) {
       const task = await dependencies.enqueueTask(browserToken, {
         requestId: input.requestId,
         executionId,
+        feishuUrls: input.feishuUrls,
+        requirements: input.requirements,
         phoneFilePath: input.phoneFilePath,
+        robotName: input.robotName,
         prompt: buildCodexPrompt({
           executionId,
           agentToken: created.agentToken,
@@ -141,7 +156,9 @@ export function createPairedTaskHandler(dependencies: Dependencies) {
 }
 
 export const POST = createPairedTaskHandler({
-  getBrowserScope: (token) => deviceService.getBrowserScope(token),
+  getRequestUser,
+  getBrowserScope: (token, expectedScope) =>
+    deviceService.getBrowserScope(token, expectedScope),
   createExecution: (scope, input) =>
     createExecutionService(scope).createExecution(scope, input),
   enqueueTask: (token, input) => deviceService.enqueueTask(token, input)

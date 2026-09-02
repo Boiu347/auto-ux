@@ -8,14 +8,7 @@ import type {
 
 export class PrismaDeviceStore implements DeviceStore {
   async createPairing(record: DevicePairingRecord): Promise<void> {
-    await prisma.$transaction(async (transaction) => {
-      await transaction.user.create({ data: { id: record.userId } });
-      await transaction.workspace.create({ data: { id: record.workspaceId } });
-      await transaction.workspaceMember.create({
-        data: { userId: record.userId, workspaceId: record.workspaceId }
-      });
-      await transaction.devicePairing.create({ data: record });
-    });
+    await prisma.devicePairing.create({ data: record });
   }
 
   async findPairingByBrowserTokenHash(
@@ -122,7 +115,7 @@ export class PrismaDeviceStore implements DeviceStore {
   }
 
   async createTask(record: DeviceTaskRecord): Promise<DeviceTaskRecord> {
-    return prisma.deviceTask.upsert({
+    return toDeviceTaskRecord(await prisma.deviceTask.upsert({
       where: {
         pairingId_requestId: {
           pairingId: record.pairingId,
@@ -131,7 +124,7 @@ export class PrismaDeviceStore implements DeviceStore {
       },
       create: record,
       update: {}
-    });
+    }));
   }
 
   async activateExecutionToken(input: {
@@ -168,7 +161,7 @@ export class PrismaDeviceStore implements DeviceStore {
         FOR UPDATE SKIP LOCKED`;
       const candidate = candidates[0];
       if (!candidate) return null;
-      return transaction.deviceTask.update({
+      return toDeviceTaskRecord(await transaction.deviceTask.update({
         where: { id: candidate.id },
         data: {
           status: "claimed",
@@ -178,7 +171,7 @@ export class PrismaDeviceStore implements DeviceStore {
           errorCode: null,
           updatedAt: input.now
         }
-      });
+      }));
     });
   }
 
@@ -209,6 +202,22 @@ export class PrismaDeviceStore implements DeviceStore {
       }
     });
     if (updated.count !== 1) return null;
-    return prisma.deviceTask.findUnique({ where: { id: input.taskId } });
+    const task = await prisma.deviceTask.findUnique({ where: { id: input.taskId } });
+    return task ? toDeviceTaskRecord(task) : null;
   }
+}
+
+type StoredDeviceTask = Omit<DeviceTaskRecord, "feishuUrls"> & {
+  feishuUrls: unknown;
+};
+
+function toDeviceTaskRecord(task: StoredDeviceTask): DeviceTaskRecord {
+  return {
+    ...task,
+    feishuUrls: Array.isArray(task.feishuUrls)
+      ? task.feishuUrls.filter(
+          (value: unknown): value is string => typeof value === "string"
+        )
+      : []
+  };
 }

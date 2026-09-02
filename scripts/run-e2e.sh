@@ -2,6 +2,8 @@
 set -eu
 
 PROJECT_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+AUTO_UX_POSTGRES_PORT=${AUTO_UX_POSTGRES_PORT:-55433}
+export AUTO_UX_POSTGRES_PORT
 
 cleanup() {
   STATUS=$?
