@@ -7,7 +7,7 @@
   "owner": "曹红鹏",
   "repo": "market/nx/nx-catalog/auto-ux",
   "meta": ["百度云", "外呼机器人", "Codex"],
-  "auth": {"mode": "feishu", "project_id": "auto-ux"},
+  "auth": {"mode": "login", "project_id": "auto-ux"},
   "runtime": {
     "type": "service",
     "health_path": "/api/health",
