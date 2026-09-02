@@ -8,7 +8,8 @@
 - 首次配对生成设备令牌。后续从同一网站升级 Agent 或 Skill 时必须复用该令牌；只有本机没有配对配置或配置属于其他网站时才重新配对。
 - 启用中央登录后，终端 `curl` 不能复用浏览器 Cookie。首次安装必须先通过公开的一次性配对接口换取并本地保存设备令牌，再从设备 Bearer 保护的资产 API 下载安装器、Agent 和 Skill；升级直接复用已有令牌。不得为解决下载问题公开 `/downloads`，也不得把登录页 HTML 当作安装脚本执行。
 - 从旧生产 IP 升级时，只允许把已验证设备令牌的 `http://118.196.147.13/auto-ux` 配置迁移到 `https://wowdata.guanghexinzhi.cn/auto-ux`；其他跨站地址变化必须重新配对。
-- LaunchAgent 必须写入受管 Codex 可执行文件的绝对路径。重载时允许最多 5 次 `bootstrap` 尝试，以处理旧实例退出与新实例加载之间的竞态。
+- LaunchAgent 必须写入受管 Codex 可执行文件的绝对路径。已有 daemon 持久管理标记时只执行幂等 `start`，不得在升级时重复 `bootstrap` 并争抢管理锁；首次缺失时允许最多 5 次 `bootstrap` 尝试，再执行 `start`。
+- daemon 管理命令必须有超时。若 `start` 因陈旧 PID/控制 socket 缺失而失败，只能在 PID 文件、进程启动时间、受管 Codex 真实路径和 `app-server daemon pid-update-loop` 命令全部匹配时终止失效 updater，再重新 bootstrap；任一身份校验不一致都必须停止，不得按 PID 猜测或广泛杀进程。
 - 不得使用剪贴板、AppleScript、模拟按键或辅助功能权限投递任务。这些方式需要额外系统授权，也无法证明任务已进入正确的 Codex 会话。
 
 ## Codex 任务投递

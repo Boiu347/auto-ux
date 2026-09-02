@@ -12,6 +12,7 @@ PLIST_PATH="$HOME/Library/LaunchAgents/com.auto-ux.mac-agent.plist"
 LABEL="com.auto-ux.mac-agent"
 CONFIG_PATH="${AUTO_UX_AGENT_CONFIG:-$HOME/.config/auto-ux/agent.json}"
 MANAGED_CODEX_PATH="$HOME/.codex/packages/standalone/current/codex"
+CODEX_DAEMON_SETTINGS="$HOME/.codex/app-server-daemon/settings.json"
 CODEX_INSTALLER_URL="https://chatgpt.com/codex/install.sh"
 
 if [[ $(uname -s) != "Darwin" ]]; then
@@ -87,13 +88,74 @@ if [[ ! -x $MANAGED_CODEX_PATH ]] || ! "$MANAGED_CODEX_PATH" app-server --help >
   echo "当前 Codex 版本不支持结构化任务投递，请升级 Codex。" >&2
   exit 1
 fi
-if ! "$MANAGED_CODEX_PATH" app-server daemon bootstrap >/dev/null 2>&1; then
-  echo "无法初始化 Codex 本地任务服务。" >&2
-  exit 1
+
+run_codex_daemon() {
+  "$NODE_PATH" -e '
+    const { spawnSync } = require("node:child_process");
+    const [command, action] = process.argv.slice(1);
+    const result = spawnSync(command, ["app-server", "daemon", action], {
+      stdio: "ignore",
+      timeout: 25_000
+    });
+    process.exit(result.status === 0 ? 0 : 1);
+  ' "$MANAGED_CODEX_PATH" "$1"
+}
+
+stop_stale_codex_updater() {
+  "$NODE_PATH" -e '
+    const fs = require("node:fs");
+    const { execFileSync } = require("node:child_process");
+    const [pidFile, command] = process.argv.slice(1);
+    if (!fs.existsSync(pidFile)) process.exit(0);
+    const record = JSON.parse(fs.readFileSync(pidFile, "utf8"));
+    if (!Number.isInteger(record.pid) || typeof record.processStartTime !== "string") process.exit(2);
+    let details;
+    try {
+      details = execFileSync("/bin/ps", ["-p", String(record.pid), "-o", "lstart=", "-o", "command="], { encoding: "utf8" });
+    } catch {
+      process.exit(0);
+    }
+    const executable = fs.realpathSync(command);
+    if (!details.includes(record.processStartTime)
+        || !details.includes(executable)
+        || !details.includes("app-server daemon pid-update-loop")) process.exit(2);
+    process.kill(record.pid, "SIGTERM");
+    const sleeper = new Int32Array(new SharedArrayBuffer(4));
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      Atomics.wait(sleeper, 0, 0, 1_000);
+      try {
+        process.kill(record.pid, 0);
+      } catch {
+        process.exit(0);
+      }
+    }
+    process.exit(1);
+  ' "$HOME/.codex/app-server-daemon/app-server-updater.pid" "$MANAGED_CODEX_PATH"
+}
+
+bootstrap_codex_daemon() {
+  CODEX_BOOTSTRAPPED=0
+  for _ in 1 2 3 4 5; do
+    if run_codex_daemon bootstrap; then
+      CODEX_BOOTSTRAPPED=1
+      break
+    fi
+    sleep 1
+  done
+  [[ $CODEX_BOOTSTRAPPED == 1 ]]
+}
+
+if [[ ! -f $CODEX_DAEMON_SETTINGS ]]; then
+  if ! bootstrap_codex_daemon; then
+    echo "无法初始化 Codex 本地任务服务。" >&2
+    exit 1
+  fi
 fi
-if ! "$MANAGED_CODEX_PATH" app-server daemon start >/dev/null 2>&1; then
-  echo "无法启动 Codex 本地任务服务。" >&2
-  exit 1
+if ! run_codex_daemon start; then
+  if ! stop_stale_codex_updater || ! bootstrap_codex_daemon || ! run_codex_daemon start; then
+    echo "无法修复并启动 Codex 本地任务服务。" >&2
+    exit 1
+  fi
 fi
 
 mkdir -p "$INSTALL_DIR" "$LOG_DIR" "$(dirname "$PLIST_PATH")"

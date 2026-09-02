@@ -207,8 +207,14 @@ test("installer installs both the Mac helper and the Codex skill", async () => {
   assert.doesNotMatch(installer, /github\.com|githubusercontent\.com/);
   assert.doesNotMatch(installer, /PAIRING_CODE/);
   assert.match(installer, /device_token:\[a-f0-9\]\{64\}/);
-  assert.match(installer, /MANAGED_CODEX_PATH.*app-server daemon bootstrap/);
-  assert.match(installer, /MANAGED_CODEX_PATH.*app-server daemon start/);
+  assert.match(installer, /run_codex_daemon bootstrap/);
+  assert.match(installer, /run_codex_daemon start/);
+  assert.match(installer, /CODEX_DAEMON_SETTINGS/);
+  assert.match(installer, /CODEX_BOOTSTRAPPED/);
+  assert.match(installer, /spawnSync.*app-server.*daemon.*timeout/s);
+  assert.match(installer, /app-server daemon pid-update-loop/);
+  assert.match(installer, /record\.processStartTime/);
+  assert.match(installer, /fs\.realpathSync/);
   assert.match(installer, /https:\/\/chatgpt\.com\/codex\/install\.sh/);
   assert.match(installer, /CODEX_NON_INTERACTIVE=1/);
   assert.match(installer, /AUTO_UX_CODEX_PATH/);
