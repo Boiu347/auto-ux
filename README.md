@@ -78,7 +78,7 @@ pnpm dev:down
 | `FEISHU_OAUTH_REDIRECT_URI` | 飞书安全设置中登记的精确回调 URL；生产必须使用 HTTPS |
 | `AUTO_UX_RUNTIME_DIR` | 运行时 PID、演示执行 ID 和日志目录 |
 | `AUTO_UX_LOCAL_CODEX_LAUNCH` | 本地开发适配器开关；生产环境始终忽略，生产任务只通过 Mac Agent 投递 |
-| `AUTO_UX_PUBLIC_BASE_URL` | Codex 网站回报使用的完整外部地址；反向代理部署必须包含公开路径，例如 `http://118.196.147.13/auto-ux` |
+| `AUTO_UX_PUBLIC_BASE_URL` | Codex 网站回报使用的完整外部地址；反向代理部署必须包含公开路径，例如 `https://wowdata.guanghexinzhi.cn/auto-ux/` |
 
 ## NX Server 部署
 
@@ -95,6 +95,8 @@ http://118.196.147.13/auto-ux/
 独立 OAuth 登录要求 HTTPS，且飞书开放平台的安全设置必须预先登记与 `FEISHU_OAUTH_REDIRECT_URI` 完全一致的回调地址。NX 托管生产入口由中央登录完成认证，并在反向代理层移除外部传入的断言头后重新签发项目级断言。
 
 中央登录反向代理必须为机器调用保留窄范围例外：`GET /api/health`、`POST /api/devices/pair`，以及携带格式正确的 `device_token` 或 `execution_token` Bearer 的 `/api/*` 请求直接交给应用。应用仍会查询令牌哈希、作用域和有效期；其他页面与 API 必须经过中央飞书登录。生产验收必须同时测试匿名页面跳转、伪造断言被移除、无效 Bearer 返回 401、真实 Mac Agent 心跳和网站历史读取。
+
+终端安装不能复用浏览器的飞书 Cookie，也不能把 `/downloads` 设为公开目录。首次安装命令先通过公开的一次性 `POST /api/devices/pair` 消费配对码并保存设备令牌，再用该令牌从 `/api/devices/assets/*` 下载安装器、Agent 和 Skill；升级命令直接复用本机现有设备令牌。旧版 `http://118.196.147.13/auto-ux` 配置只允许迁移到当前 HTTPS 地址，不允许迁移到任意站点。
 
 仓库中的 `.gitlab-ci.yml`、`Dockerfile`、`docker-entrypoint.sh` 和 `monitor.yaml` 是部署合同的一部分。GitHub 与 GitLab 应保持在同一个提交，GitLab 负责执行部署。
 

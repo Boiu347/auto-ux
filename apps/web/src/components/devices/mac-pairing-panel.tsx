@@ -20,7 +20,58 @@ type PairingState =
   | { status: "expired" }
   | { status: "error"; message: string };
 
-const CURRENT_AGENT_VERSION = "0.4.3";
+const CURRENT_AGENT_VERSION = "0.4.4";
+
+const installerRunner = [
+  'async function runInstaller(base,token){',
+  'const response=await fetch(base+"/api/devices/assets/install-mac-agent.sh",',
+  '{headers:{authorization:"Bearer "+token}});',
+  'if(!response.ok)throw new Error("INSTALLER_HTTP_"+response.status);',
+  'const child=spawn("/bin/bash",["-s","--",base],{stdio:["pipe","inherit","inherit"]});',
+  'child.stdin.end(await response.text());',
+  'const status=await new Promise((resolve,reject)=>{child.once("error",reject);child.once("close",resolve)});',
+  'if(status!==0)process.exit(status??1);',
+  '}'
+].join("");
+
+export const initialInstallProgram = [
+  'import fs from "node:fs";import os from "node:os";import path from "node:path";',
+  'import{spawn}from "node:child_process";',
+  installerRunner,
+  'const[base,code]=process.argv.slice(1);',
+  'const host=os.hostname().replace(/[^A-Za-z0-9_-]/g,"_").slice(0,40)||"Codex";',
+  'const agentId="Mac_"+host;',
+  'const response=await fetch(base+"/api/devices/pair",{method:"POST",',
+  'headers:{"content-type":"application/json"},',
+  'body:JSON.stringify({code,agentId,version:"0.4.4"})});',
+  'const payload=await response.json().catch(()=>({}));',
+  'if(!response.ok||!/^device_token:[a-f0-9]{64}$/.test(payload.deviceToken))',
+  'throw new Error(payload.code||"PAIRING_FAILED");',
+  'const configPath=path.join(os.homedir(),".config","auto-ux","agent.json");',
+  'fs.mkdirSync(path.dirname(configPath),{recursive:true,mode:0o700});',
+  'fs.writeFileSync(configPath,JSON.stringify({apiBaseUrl:base,deviceToken:payload.deviceToken,agentId},null,2)+"\\n",{mode:0o600});',
+  'fs.chmodSync(configPath,0o600);',
+  'await runInstaller(base,payload.deviceToken);'
+].join("");
+
+export const updateInstallProgram = [
+  'import fs from "node:fs";import os from "node:os";import path from "node:path";',
+  'import{spawn}from "node:child_process";',
+  installerRunner,
+  'const[base]=process.argv.slice(1);',
+  'const configPath=path.join(os.homedir(),".config","auto-ux","agent.json");',
+  'const config=JSON.parse(fs.readFileSync(configPath,"utf8"));',
+  'if(!/^device_token:[a-f0-9]{64}$/.test(config.deviceToken))throw new Error("DEVICE_TOKEN_INVALID");',
+  'await runInstaller(base,config.deviceToken);'
+].join("");
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function nodeInstallCommand(program: string, ...args: string[]): string {
+  return `node --input-type=module -e ${shellQuote(program)} ${args.map(shellQuote).join(" ")}`;
+}
 
 export function MacPairingPanel({
   origin,
@@ -80,10 +131,10 @@ export function MacPairingPanel({
   const baseUrl = origin ?? (typeof window === "undefined" ? "" : publicOrigin(window.location.origin));
   const installCommand = useMemo(() => {
     if (pairing.status !== "waiting") return "";
-    return `curl -fsSL '${baseUrl}/downloads/install-mac-agent.sh' | bash -s -- '${baseUrl}' '${pairing.code}'`;
+    return nodeInstallCommand(initialInstallProgram, baseUrl, pairing.code);
   }, [baseUrl, pairing]);
   const updateCommand = useMemo(
-    () => `curl -fsSL '${baseUrl}/downloads/install-mac-agent.sh' | bash -s -- '${baseUrl}'`,
+    () => nodeInstallCommand(updateInstallProgram, baseUrl),
     [baseUrl]
   );
   const updateRequired = pairing.status === "paired" && pairing.version !== CURRENT_AGENT_VERSION;

@@ -317,6 +317,10 @@ export class DeviceService {
     };
   }
 
+  async authenticateDevice(deviceToken: string): Promise<void> {
+    await this.requireDevicePairing(deviceToken);
+  }
+
   async updateTask(
     deviceToken: string,
     taskId: string,

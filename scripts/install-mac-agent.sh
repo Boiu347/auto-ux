@@ -2,8 +2,7 @@
 set -euo pipefail
 
 API_BASE_URL=${1:-}
-PAIRING_CODE=${2:-}
-ASSET_BASE_URL="${API_BASE_URL%/}/downloads"
+ASSET_BASE_URL="${API_BASE_URL%/}/api/devices/assets"
 AGENT_SOURCE_URL="$ASSET_BASE_URL/mac-agent.mjs"
 SOURCE_ARCHIVE_URL="$ASSET_BASE_URL/baidu-cloud-one-click-config.tar.gz"
 INSTALL_DIR="$HOME/Library/Application Support/AutoUX"
@@ -24,10 +23,6 @@ if [[ ! $API_BASE_URL =~ ^https://[^[:space:]]+$ ]] \
   echo "缺少有效的网站地址；HTTP 仅允许当前生产 IP 或本机地址。" >&2
   exit 1
 fi
-if [[ -n $PAIRING_CODE && ! $PAIRING_CODE =~ ^[A-Fa-f0-9]{8}$ ]]; then
-  echo "配对码必须是 8 位十六进制字符。" >&2
-  exit 1
-fi
 if ! command -v node >/dev/null 2>&1; then
   echo "未找到 Node.js 20 或更高版本，请先安装 Node.js。" >&2
   exit 1
@@ -39,28 +34,41 @@ if (( NODE_MAJOR < 20 )); then
   exit 1
 fi
 
-if [[ -z $PAIRING_CODE ]]; then
-  if [[ ! -f $CONFIG_PATH ]]; then
-    echo "未找到现有 Mac 助手配对；首次安装需要网站生成的配对码。" >&2
-    exit 1
-  fi
-  if ! "$NODE_PATH" -e '
-    const fs = require("node:fs");
-    const [path, expected] = process.argv.slice(1);
-    const config = JSON.parse(fs.readFileSync(path, "utf8"));
-    const normalize = (value) => String(value).replace(/\/+$/, "");
-    if (!config.deviceToken || normalize(config.apiBaseUrl) !== normalize(expected)) process.exit(1);
-  ' "$CONFIG_PATH" "$API_BASE_URL"; then
-    echo "现有配对不属于当前网站；请从网站重新生成配对码。" >&2
-    exit 1
-  fi
+if [[ ! -f $CONFIG_PATH ]]; then
+  echo "未找到 Mac 助手配对配置；请使用网站生成的完整安装命令。" >&2
+  exit 1
+fi
+if ! DEVICE_TOKEN=$("$NODE_PATH" -e '
+  const fs = require("node:fs");
+  const [path, expected] = process.argv.slice(1);
+  const config = JSON.parse(fs.readFileSync(path, "utf8"));
+  const normalize = (value) => String(value).replace(/\/+$/, "");
+  const current = normalize(config.apiBaseUrl);
+  const target = normalize(expected);
+  const legacyUpgrade = current === "http://118.196.147.13/auto-ux"
+    && target === "https://wowdata.guanghexinzhi.cn/auto-ux";
+  if (!/^device_token:[a-f0-9]{64}$/.test(config.deviceToken)
+      || (current !== target && !legacyUpgrade)) process.exit(1);
+  process.stdout.write(config.deviceToken);
+' "$CONFIG_PATH" "$API_BASE_URL"); then
+  echo "现有配对不属于当前网站；请从网站重新生成配对码。" >&2
+  exit 1
 fi
 
-download_file() {
+download_public_file() {
   local source_url=$1
   local destination=$2
   curl --fail --silent --show-error --location \
     --retry 4 --retry-delay 2 --connect-timeout 10 --max-time 120 \
+    "$source_url" -o "$destination"
+}
+
+download_asset() {
+  local source_url=$1
+  local destination=$2
+  curl --fail --silent --show-error --location \
+    --retry 4 --retry-delay 2 --connect-timeout 10 --max-time 120 \
+    --header "Authorization: Bearer $DEVICE_TOKEN" \
     "$source_url" -o "$destination"
 }
 
@@ -69,7 +77,7 @@ trap 'rm -rf "$TEMP_SOURCE"' EXIT
 
 if [[ ! -x $MANAGED_CODEX_PATH ]]; then
   CODEX_INSTALLER_PATH="$TEMP_SOURCE/codex-install.sh"
-  if ! download_file "$CODEX_INSTALLER_URL" "$CODEX_INSTALLER_PATH"; then
+  if ! download_public_file "$CODEX_INSTALLER_URL" "$CODEX_INSTALLER_PATH"; then
     echo "Codex 本地任务组件下载失败，请检查网络后重试。" >&2
     exit 1
   fi
@@ -90,7 +98,7 @@ fi
 
 mkdir -p "$INSTALL_DIR" "$LOG_DIR" "$(dirname "$PLIST_PATH")"
 TEMP_AGENT="$AGENT_PATH.download"
-if ! download_file "$AGENT_SOURCE_URL" "$TEMP_AGENT"; then
+if ! download_asset "$AGENT_SOURCE_URL" "$TEMP_AGENT"; then
   echo "Mac 助手下载失败，请检查生产站点连接后重试。" >&2
   exit 1
 fi
@@ -98,7 +106,7 @@ chmod 700 "$TEMP_AGENT"
 mv "$TEMP_AGENT" "$AGENT_PATH"
 
 SOURCE_ARCHIVE="$TEMP_SOURCE/baidu-cloud-one-click-config.tar.gz"
-if ! download_file "$SOURCE_ARCHIVE_URL" "$SOURCE_ARCHIVE"; then
+if ! download_asset "$SOURCE_ARCHIVE_URL" "$SOURCE_ARCHIVE"; then
   echo "百度云一键配置 Skill 下载失败，请检查生产站点连接后重试。" >&2
   exit 1
 fi
@@ -113,12 +121,17 @@ mkdir -p "$SKILL_DIR"
 cp -R "$SKILL_SOURCE/." "$SKILL_DIR/"
 chmod 700 "$SKILL_DIR/scripts/"*.py
 
-if [[ -n $PAIRING_CODE ]]; then
-  PAIRING_CODE_UPPER=$(printf '%s' "$PAIRING_CODE" | tr '[:lower:]' '[:upper:]')
-  "$NODE_PATH" "$AGENT_PATH" pair "$API_BASE_URL" "$PAIRING_CODE_UPPER"
-else
-  echo "已复用现有 Mac 助手配对。"
-fi
+"$NODE_PATH" -e '
+  const fs = require("node:fs");
+  const [path, apiBaseUrl] = process.argv.slice(1);
+  const config = JSON.parse(fs.readFileSync(path, "utf8"));
+  config.apiBaseUrl = String(apiBaseUrl).replace(/\/+$/, "");
+  const temporary = `${path}.upgrade`;
+  fs.writeFileSync(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(temporary, path);
+  fs.chmodSync(path, 0o600);
+' "$CONFIG_PATH" "$API_BASE_URL"
+echo "已复用现有 Mac 助手配对。"
 
 xml_escape() {
   printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'

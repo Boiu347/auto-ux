@@ -1,11 +1,27 @@
+import { spawnSync } from "node:child_process";
+
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { MacPairingPanel } from "./mac-pairing-panel";
+import {
+  initialInstallProgram,
+  MacPairingPanel,
+  updateInstallProgram
+} from "./mac-pairing-panel";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("MacPairingPanel", () => {
+  it("generates Node programs with valid module syntax", () => {
+    for (const program of [initialInstallProgram, updateInstallProgram]) {
+      const result = spawnSync(process.execPath, ["--input-type=module", "--check"], {
+        encoding: "utf8",
+        input: program
+      });
+      expect(result.status, result.stderr).toBe(0);
+    }
+  });
+
   it("creates a one-time code and shows the exact install command", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(Response.json({ status: "unpaired" }))
@@ -21,7 +37,10 @@ describe("MacPairingPanel", () => {
 
     expect(await screen.findByText("A1B2C3D4")).toBeInTheDocument();
     expect(screen.getByText(/install-mac-agent\.sh/)).toHaveTextContent(
-      "https://auto-ux.example/downloads/install-mac-agent.sh"
+      "/api/devices/assets/install-mac-agent.sh"
+    );
+    expect(screen.getByText(/install-mac-agent\.sh/)).toHaveTextContent(
+      "/api/devices/pair"
     );
     expect(screen.getByText(/install-mac-agent\.sh/)).not.toHaveTextContent("githubusercontent");
   });
@@ -32,7 +51,7 @@ describe("MacPairingPanel", () => {
       status: "paired",
       pairingId: "Pairing_1",
       agentId: "MacAgent_1",
-      version: "0.4.3",
+      version: "0.4.4",
       online: true,
       lastSeenAt: "2026-08-06T04:00:00.000Z"
     })));
@@ -56,8 +75,9 @@ describe("MacPairingPanel", () => {
 
     expect(await screen.findByText(/升级会保留现有配对/)).toBeInTheDocument();
     expect(screen.getByText(/install-mac-agent\.sh/)).toHaveTextContent(
-      "bash -s -- 'https://auto-ux.example'"
+      "/api/devices/assets/install-mac-agent.sh"
     );
+    expect(screen.getByText(/install-mac-agent\.sh/)).toHaveTextContent("Bearer");
     expect(screen.getByText(/install-mac-agent\.sh/)).not.toHaveTextContent("0.3.0");
     await waitFor(() => expect(onReadyChange).toHaveBeenCalledWith(false));
   });

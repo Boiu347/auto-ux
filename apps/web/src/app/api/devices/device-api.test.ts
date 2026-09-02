@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createPairingHandlers } from "../pairings/route";
 import { createCurrentPairingHandler } from "../pairings/current/route";
 import { createDevicePairHandler } from "./pair/route";
+import { createDeviceAssetHandler } from "./assets/[assetName]/route";
 import { createNextTaskHandler } from "./tasks/next/route";
 import { createDeviceTaskStatusHandler } from "./tasks/[taskId]/route";
 
@@ -111,7 +112,7 @@ describe("Mac device API", () => {
       new Request("https://auto-ux.example/api/devices/tasks/next", {
         headers: {
           authorization: `Bearer device_token:${"d".repeat(64)}`,
-          "x-auto-ux-agent-version": "0.4.3"
+          "x-auto-ux-agent-version": "0.4.4"
         }
       })
     );
@@ -119,8 +120,39 @@ describe("Mac device API", () => {
     expect(response.status).toBe(204);
     expect(claimNextTask).toHaveBeenCalledWith(
       `device_token:${"d".repeat(64)}`,
-      "0.4.3"
+      "0.4.4"
     );
+  });
+
+  it("serves installer assets only after validating the device token", async () => {
+    const authenticateDevice = vi.fn().mockResolvedValue(undefined);
+    const loadAsset = vi.fn().mockResolvedValue(new TextEncoder().encode("asset"));
+    const handler = createDeviceAssetHandler({ authenticateDevice }, loadAsset);
+    const token = `device_token:${"d".repeat(64)}`;
+    const response = await handler(
+      new Request("https://auto-ux.example/api/devices/assets/mac-agent.mjs", {
+        headers: { authorization: `Bearer ${token}` }
+      }),
+      { params: Promise.resolve({ assetName: "mac-agent.mjs" }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/javascript");
+    expect(await response.text()).toBe("asset");
+    expect(authenticateDevice).toHaveBeenCalledWith(token);
+    expect(loadAsset).toHaveBeenCalledWith("mac-agent.mjs");
+  });
+
+  it("rejects asset downloads without a device bearer token", async () => {
+    const authenticateDevice = vi.fn();
+    const handler = createDeviceAssetHandler({ authenticateDevice }, vi.fn());
+    const response = await handler(
+      new Request("https://auto-ux.example/api/devices/assets/mac-agent.mjs"),
+      { params: Promise.resolve({ assetName: "mac-agent.mjs" }) }
+    );
+
+    expect(response.status).toBe(401);
+    expect(authenticateDevice).not.toHaveBeenCalled();
   });
 
   it("rejects device polling without a device bearer token", async () => {

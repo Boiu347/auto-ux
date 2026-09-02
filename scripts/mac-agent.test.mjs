@@ -80,7 +80,7 @@ test("pollOnce treats an empty queue as healthy idle state", async () => {
     ),
     "idle"
   );
-  assert.equal(requests[0][1].headers["x-auto-ux-agent-version"], "0.4.3");
+  assert.equal(requests[0][1].headers["x-auto-ux-agent-version"], "0.4.4");
 });
 
 function readClientFrame(buffer) {
@@ -202,10 +202,11 @@ test("installer installs both the Mac helper and the Codex skill", async () => {
   assert.match(installer, /\.codex\/skills\/baidu-cloud-one-click-config/);
   assert.match(installer, /SOURCE_ARCHIVE_URL/);
   assert.match(installer, /118\\\.196\\\.147\\\.13/);
-  assert.match(installer, /API_BASE_URL%\/.*downloads/);
+  assert.match(installer, /API_BASE_URL%\/.*api\/devices\/assets/);
+  assert.match(installer, /Authorization: Bearer \$DEVICE_TOKEN/);
   assert.doesNotMatch(installer, /github\.com|githubusercontent\.com/);
-  assert.doesNotMatch(installer, /\$\{PAIRING_CODE\^\^\}/);
-  assert.match(installer, /tr '\[:lower:\]' '\[:upper:\]'/);
+  assert.doesNotMatch(installer, /PAIRING_CODE/);
+  assert.match(installer, /device_token:\[a-f0-9\]\{64\}/);
   assert.match(installer, /MANAGED_CODEX_PATH.*app-server daemon bootstrap/);
   assert.match(installer, /MANAGED_CODEX_PATH.*app-server daemon start/);
   assert.match(installer, /https:\/\/chatgpt\.com\/codex\/install\.sh/);
@@ -221,6 +222,7 @@ test("Mac delivery uses structured Codex RPC and no paste automation", async () 
   const source = await readFile(new URL("./mac-agent.mjs", import.meta.url), "utf8");
   assert.match(source, /"thread\/start"/);
   assert.match(source, /"turn\/start"/);
+  assert.match(source, /"thread\/list"/);
   assert.match(source, /\["app-server", "proxy"\]/);
   assert.match(source, /\["app-server", "daemon", "start"\]/);
   assert.doesNotMatch(source, /pbcopy|osascript|keystroke|clipboard/i);

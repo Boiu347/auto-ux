@@ -8,7 +8,7 @@ import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const VERSION = "0.4.3";
+const VERSION = "0.4.4";
 const POLL_INTERVAL_MS = 3_000;
 const DEFAULT_CONFIG_PATH = join(homedir(), ".config", "auto-ux", "agent.json");
 const CODEX_RPC_TIMEOUT_MS = 20_000;
@@ -176,6 +176,41 @@ export async function startCodexTask(prompt, workspacePath, options = {}) {
   } catch (error) {
     rpc.close();
     throw error;
+  }
+}
+
+export async function inspectCodexDaemon(options = {}) {
+  const command = options.codexPath ?? findCodexCli();
+  await (options.ensureDaemon ?? ensureCodexDaemon)(command);
+  const child = (options.spawnProcess ?? spawn)(
+    command,
+    ["app-server", "proxy"],
+    { shell: false, stdio: ["pipe", "pipe", "pipe"] }
+  );
+  const rpc = createJsonRpcClient(
+    child,
+    options.timeoutMs ?? CODEX_RPC_TIMEOUT_MS,
+    options.webSocketKey
+  );
+  try {
+    await rpc.request("initialize", {
+      clientInfo: {
+        name: "auto-ux-mac-agent",
+        title: "Auto UX Mac Agent",
+        version: VERSION
+      }
+    });
+    rpc.notify("initialized");
+    const listed = await rpc.request("thread/list", {
+      limit: 1,
+      useStateDbOnly: true
+    });
+    if (!Array.isArray(listed?.data)) {
+      throw new Error("CODEX_INVALID_RESPONSE");
+    }
+    return { threadCount: listed.data.length };
+  } finally {
+    rpc.close();
   }
 }
 
@@ -445,6 +480,11 @@ async function main() {
     if (!first || !second) throw new Error("usage: mac-agent.mjs pair <url> <code>");
     await claimPairing(first, second);
     process.stdout.write("Mac 助手配对成功。\n");
+    return;
+  }
+  if (command === "doctor") {
+    const result = await inspectCodexDaemon();
+    process.stdout.write(`Codex app-server 可用，thread/list 返回 ${result.threadCount} 条。\n`);
     return;
   }
   if (command !== "run") throw new Error(`unknown command: ${command}`);
