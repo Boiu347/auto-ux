@@ -8,7 +8,7 @@ import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const VERSION = "0.4.4";
+const VERSION = "0.4.5";
 const POLL_INTERVAL_MS = 3_000;
 const DEFAULT_CONFIG_PATH = join(homedir(), ".config", "auto-ux", "agent.json");
 const CODEX_RPC_TIMEOUT_MS = 20_000;

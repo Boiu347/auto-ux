@@ -14,6 +14,8 @@ CONFIG_PATH="${AUTO_UX_AGENT_CONFIG:-$HOME/.config/auto-ux/agent.json}"
 MANAGED_CODEX_PATH="$HOME/.codex/packages/standalone/current/codex"
 CODEX_DAEMON_SETTINGS="$HOME/.codex/app-server-daemon/settings.json"
 CODEX_INSTALLER_URL="https://chatgpt.com/codex/install.sh"
+MANAGED_NODE_VERSION="22.23.2"
+MANAGED_NODE_ROOT="$INSTALL_DIR/runtime"
 
 if [[ $(uname -s) != "Darwin" ]]; then
   echo "当前安装器只支持 macOS。" >&2
@@ -24,14 +26,64 @@ if [[ ! $API_BASE_URL =~ ^https://[^[:space:]]+$ ]] \
   echo "缺少有效的网站地址；HTTP 仅允许当前生产 IP 或本机地址。" >&2
   exit 1
 fi
-if ! command -v node >/dev/null 2>&1; then
-  echo "未找到 Node.js 20 或更高版本，请先安装 Node.js。" >&2
-  exit 1
+download_public_file() {
+  local source_url=$1
+  local destination=$2
+  curl --fail --silent --show-error --location \
+    --retry 4 --retry-delay 2 --connect-timeout 10 --max-time 120 \
+    "$source_url" -o "$destination"
+}
+
+download_asset() {
+  local source_url=$1
+  local destination=$2
+  curl --fail --silent --show-error --location \
+    --retry 4 --retry-delay 2 --connect-timeout 10 --max-time 120 \
+    --header "Authorization: Bearer $DEVICE_TOKEN" \
+    "$source_url" -o "$destination"
+}
+
+TEMP_SOURCE=$(mktemp -d "${TMPDIR:-/tmp}/auto-ux-install.XXXXXX")
+trap 'rm -rf "$TEMP_SOURCE"' EXIT
+
+case $(uname -m) in
+  arm64)
+    NODE_PLATFORM="darwin-arm64"
+    NODE_ARCHIVE_SHA256="61130f394c1630d211dd50aecc4353d379480f36d3ac913cd85dbba1aed585c6"
+    ;;
+  x86_64)
+    NODE_PLATFORM="darwin-x64"
+    NODE_ARCHIVE_SHA256="58e99022c2ff89395576cc7fd4d98cea24bb68081475d5f88b801ee8729fb026"
+    ;;
+  *)
+    echo "不支持当前 Mac 架构。" >&2
+    exit 1
+    ;;
+esac
+NODE_PACKAGE="node-v$MANAGED_NODE_VERSION-$NODE_PLATFORM"
+MANAGED_NODE_DIR="$MANAGED_NODE_ROOT/$NODE_PACKAGE"
+NODE_PATH="$MANAGED_NODE_DIR/bin/node"
+
+if [[ ! -x $NODE_PATH ]] || [[ $("$NODE_PATH" -p 'process.versions.node' 2>/dev/null || true) != "$MANAGED_NODE_VERSION" ]]; then
+  NODE_ARCHIVE="$TEMP_SOURCE/$NODE_PACKAGE.tar.gz"
+  if ! download_public_file "https://nodejs.org/dist/v$MANAGED_NODE_VERSION/$NODE_PACKAGE.tar.gz" "$NODE_ARCHIVE"; then
+    echo "Node.js 受管运行时下载失败，请检查网络后重试。" >&2
+    exit 1
+  fi
+  ACTUAL_NODE_SHA256=$(/usr/bin/shasum -a 256 "$NODE_ARCHIVE" | /usr/bin/awk '{print $1}')
+  if [[ $ACTUAL_NODE_SHA256 != "$NODE_ARCHIVE_SHA256" ]]; then
+    echo "Node.js 受管运行时校验失败，安装已停止。" >&2
+    exit 1
+  fi
+  tar -xzf "$NODE_ARCHIVE" -C "$TEMP_SOURCE"
+  mkdir -p "$MANAGED_NODE_ROOT"
+  if [[ -e $MANAGED_NODE_DIR ]]; then
+    mv "$MANAGED_NODE_DIR" "$TEMP_SOURCE/invalid-node-runtime"
+  fi
+  mv "$TEMP_SOURCE/$NODE_PACKAGE" "$MANAGED_NODE_DIR"
 fi
-NODE_PATH=$(command -v node)
-NODE_MAJOR=$($NODE_PATH -p 'Number(process.versions.node.split(".")[0])')
-if (( NODE_MAJOR < 20 )); then
-  echo "Node.js 版本过低，需要 20 或更高版本。" >&2
+if [[ ! -x $NODE_PATH ]] || [[ $("$NODE_PATH" -p 'process.versions.node') != "$MANAGED_NODE_VERSION" ]]; then
+  echo "Node.js 受管运行时不可用。" >&2
   exit 1
 fi
 
@@ -55,26 +107,6 @@ if ! DEVICE_TOKEN=$("$NODE_PATH" -e '
   echo "现有配对不属于当前网站；请从网站重新生成配对码。" >&2
   exit 1
 fi
-
-download_public_file() {
-  local source_url=$1
-  local destination=$2
-  curl --fail --silent --show-error --location \
-    --retry 4 --retry-delay 2 --connect-timeout 10 --max-time 120 \
-    "$source_url" -o "$destination"
-}
-
-download_asset() {
-  local source_url=$1
-  local destination=$2
-  curl --fail --silent --show-error --location \
-    --retry 4 --retry-delay 2 --connect-timeout 10 --max-time 120 \
-    --header "Authorization: Bearer $DEVICE_TOKEN" \
-    "$source_url" -o "$destination"
-}
-
-TEMP_SOURCE=$(mktemp -d "${TMPDIR:-/tmp}/auto-ux-install.XXXXXX")
-trap 'rm -rf "$TEMP_SOURCE"' EXIT
 
 if [[ ! -x $MANAGED_CODEX_PATH ]]; then
   CODEX_INSTALLER_PATH="$TEMP_SOURCE/codex-install.sh"

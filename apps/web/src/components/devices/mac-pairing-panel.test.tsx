@@ -4,22 +4,25 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  initialInstallProgram,
+  initialInstallScript,
   MacPairingPanel,
-  updateInstallProgram
+  updateInstallScript
 } from "./mac-pairing-panel";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("MacPairingPanel", () => {
-  it("generates Node programs with valid module syntax", () => {
-    for (const program of [initialInstallProgram, updateInstallProgram]) {
-      const result = spawnSync(process.execPath, ["--input-type=module", "--check"], {
+  it("generates POSIX shell installers that do not require Node", () => {
+    for (const script of [initialInstallScript, updateInstallScript]) {
+      const result = spawnSync("/bin/sh", ["-n"], {
         encoding: "utf8",
-        input: program
+        input: script
       });
       expect(result.status, result.stderr).toBe(0);
+      expect(script).not.toMatch(/(^|[;&|]\s*)node(?:\s|$)/m);
     }
+    expect(initialInstallScript.match(/\/api\/devices\/pair/g)).toHaveLength(1);
+    expect(initialInstallScript).toContain("version -string bootstrap");
   });
 
   it("creates a one-time code and shows the exact install command", async () => {
@@ -42,6 +45,8 @@ describe("MacPairingPanel", () => {
     expect(screen.getByText(/install-mac-agent\.sh/)).toHaveTextContent(
       "/api/devices/pair"
     );
+    expect(screen.getByText(/install-mac-agent\.sh/)).toHaveTextContent("/bin/sh -c");
+    expect(screen.getByText(/install-mac-agent\.sh/)).not.toHaveTextContent("node --input-type");
     expect(screen.getByText(/install-mac-agent\.sh/)).not.toHaveTextContent("githubusercontent");
   });
 
@@ -51,7 +56,7 @@ describe("MacPairingPanel", () => {
       status: "paired",
       pairingId: "Pairing_1",
       agentId: "MacAgent_1",
-      version: "0.4.4",
+      version: "0.4.5",
       online: true,
       lastSeenAt: "2026-08-06T04:00:00.000Z"
     })));

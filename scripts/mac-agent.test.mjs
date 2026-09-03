@@ -80,7 +80,7 @@ test("pollOnce treats an empty queue as healthy idle state", async () => {
     ),
     "idle"
   );
-  assert.equal(requests[0][1].headers["x-auto-ux-agent-version"], "0.4.4");
+  assert.equal(requests[0][1].headers["x-auto-ux-agent-version"], "0.4.5");
 });
 
 function readClientFrame(buffer) {
@@ -216,6 +216,15 @@ test("installer installs both the Mac helper and the Codex skill", async () => {
   assert.match(installer, /record\.processStartTime/);
   assert.match(installer, /fs\.realpathSync/);
   assert.match(installer, /https:\/\/chatgpt\.com\/codex\/install\.sh/);
+  assert.match(installer, /MANAGED_NODE_VERSION="22\.23\.2"/);
+  assert.match(installer, /node-v\$MANAGED_NODE_VERSION-\$NODE_PLATFORM/);
+  assert.match(installer, /darwin-arm64/);
+  assert.match(installer, /darwin-x64/);
+  assert.match(installer, /NODE_ARCHIVE_SHA256/);
+  assert.match(installer, /shasum -a 256/);
+  assert.match(installer, /Node\.js 受管运行时校验失败/);
+  assert.doesNotMatch(installer, /command -v node/);
+  assert.match(installer, /\$\("\$NODE_PATH" -p 'process\.versions\.node'/);
   assert.match(installer, /CODEX_NON_INTERACTIVE=1/);
   assert.match(installer, /AUTO_UX_CODEX_PATH/);
   assert.match(installer, /packages\/standalone\/current\/codex/);

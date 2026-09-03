@@ -20,57 +20,84 @@ type PairingState =
   | { status: "expired" }
   | { status: "error"; message: string };
 
-const CURRENT_AGENT_VERSION = "0.4.4";
+const CURRENT_AGENT_VERSION = "0.4.5";
+
+const tokenValidation = [
+  'token_value=${token#device_token:}',
+  '[ "$token_value" != "$token" ] && [ "${#token_value}" -eq 64 ] || { echo "设备令牌无效。" >&2; exit 1; }',
+  'case "$token_value" in *[!0-9a-f]*) echo "设备令牌无效。" >&2; exit 1;; esac'
+].join("\n");
 
 const installerRunner = [
-  'async function runInstaller(base,token){',
-  'const response=await fetch(base+"/api/devices/assets/install-mac-agent.sh",',
-  '{headers:{authorization:"Bearer "+token}});',
-  'if(!response.ok)throw new Error("INSTALLER_HTTP_"+response.status);',
-  'const child=spawn("/bin/bash",["-s","--",base],{stdio:["pipe","inherit","inherit"]});',
-  'child.stdin.end(await response.text());',
-  'const status=await new Promise((resolve,reject)=>{child.once("error",reject);child.once("close",resolve)});',
-  'if(status!==0)process.exit(status??1);',
-  '}'
-].join("");
+  'installer="$temp/install-mac-agent.sh"',
+  '/usr/bin/curl --fail --silent --show-error --location --retry 4 --retry-delay 2',
+  '  --connect-timeout 10 --max-time 120 --header "Authorization: Bearer $token"',
+  '  "$base/api/devices/assets/install-mac-agent.sh" -o "$installer"',
+  '/bin/chmod 700 "$installer"',
+  '/bin/bash "$installer" "$base"'
+].join("\n");
 
-export const initialInstallProgram = [
-  'import fs from "node:fs";import os from "node:os";import path from "node:path";',
-  'import{spawn}from "node:child_process";',
-  installerRunner,
-  'const[base,code]=process.argv.slice(1);',
-  'const host=os.hostname().replace(/[^A-Za-z0-9_-]/g,"_").slice(0,40)||"Codex";',
-  'const agentId="Mac_"+host;',
-  'const response=await fetch(base+"/api/devices/pair",{method:"POST",',
-  'headers:{"content-type":"application/json"},',
-  'body:JSON.stringify({code,agentId,version:"0.4.4"})});',
-  'const payload=await response.json().catch(()=>({}));',
-  'if(!response.ok||!/^device_token:[a-f0-9]{64}$/.test(payload.deviceToken))',
-  'throw new Error(payload.code||"PAIRING_FAILED");',
-  'const configPath=path.join(os.homedir(),".config","auto-ux","agent.json");',
-  'fs.mkdirSync(path.dirname(configPath),{recursive:true,mode:0o700});',
-  'fs.writeFileSync(configPath,JSON.stringify({apiBaseUrl:base,deviceToken:payload.deviceToken,agentId},null,2)+"\\n",{mode:0o600});',
-  'fs.chmodSync(configPath,0o600);',
-  'await runInstaller(base,payload.deviceToken);'
-].join("");
+export const initialInstallScript = [
+  'set -eu',
+  'umask 077',
+  'base=$1',
+  'code=$2',
+  'temp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/auto-ux-bootstrap.XXXXXX")',
+  'trap \'/bin/rm -rf "$temp"\' EXIT HUP INT TERM',
+  'host=$(/bin/hostname | /usr/bin/tr -cd "A-Za-z0-9_-" | /usr/bin/cut -c 1-40)',
+  '[ -n "$host" ] || host=Codex',
+  'agent_id="Mac_$host"',
+  'request="$temp/pair.plist"',
+  'request_json="$temp/pair.json"',
+  'response="$temp/response.json"',
+  '/usr/bin/plutil -create xml1 "$request"',
+  '/usr/bin/plutil -insert code -string "$code" "$request"',
+  '/usr/bin/plutil -insert agentId -string "$agent_id" "$request"',
+  '/usr/bin/plutil -insert version -string bootstrap "$request"',
+  '/usr/bin/plutil -convert json -o "$request_json" "$request"',
+  'status=$(/usr/bin/curl --silent --show-error --connect-timeout 10 --max-time 30',
+  '  -o "$response" -w "%{http_code}" -H "Content-Type: application/json"',
+  '  --data-binary "@$request_json" "$base/api/devices/pair")',
+  '[ "$status" = 200 ] || {',
+  '  error=$(/usr/bin/plutil -extract code raw -expect string -o - "$response" 2>/dev/null || true)',
+  '  echo "Mac 配对失败：${error:-HTTP_$status}。请回网站检查配对状态，禁止重复提交同一配对码。" >&2',
+  '  exit 1',
+  '}',
+  'token=$(/usr/bin/plutil -extract deviceToken raw -expect string -o - "$response")',
+  tokenValidation,
+  'config_dir="$HOME/.config/auto-ux"',
+  'config_plist="$temp/agent.plist"',
+  'config="$config_dir/agent.json"',
+  '/bin/mkdir -p "$config_dir"',
+  '/bin/chmod 700 "$config_dir"',
+  '/usr/bin/plutil -create xml1 "$config_plist"',
+  '/usr/bin/plutil -insert apiBaseUrl -string "$base" "$config_plist"',
+  '/usr/bin/plutil -insert deviceToken -string "$token" "$config_plist"',
+  '/usr/bin/plutil -insert agentId -string "$agent_id" "$config_plist"',
+  '/usr/bin/plutil -convert json -o "$config" "$config_plist"',
+  '/bin/chmod 600 "$config"',
+  installerRunner
+].join("\n");
 
-export const updateInstallProgram = [
-  'import fs from "node:fs";import os from "node:os";import path from "node:path";',
-  'import{spawn}from "node:child_process";',
-  installerRunner,
-  'const[base]=process.argv.slice(1);',
-  'const configPath=path.join(os.homedir(),".config","auto-ux","agent.json");',
-  'const config=JSON.parse(fs.readFileSync(configPath,"utf8"));',
-  'if(!/^device_token:[a-f0-9]{64}$/.test(config.deviceToken))throw new Error("DEVICE_TOKEN_INVALID");',
-  'await runInstaller(base,config.deviceToken);'
-].join("");
+export const updateInstallScript = [
+  'set -eu',
+  'umask 077',
+  'base=$1',
+  'config="$HOME/.config/auto-ux/agent.json"',
+  '[ -f "$config" ] || { echo "未找到 Mac 助手配对配置。" >&2; exit 1; }',
+  'token=$(/usr/bin/plutil -extract deviceToken raw -expect string -o - "$config")',
+  tokenValidation,
+  'temp=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/auto-ux-upgrade.XXXXXX")',
+  'trap \'/bin/rm -rf "$temp"\' EXIT HUP INT TERM',
+  installerRunner
+].join("\n");
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-function nodeInstallCommand(program: string, ...args: string[]): string {
-  return `node --input-type=module -e ${shellQuote(program)} ${args.map(shellQuote).join(" ")}`;
+function shellInstallCommand(script: string, ...args: string[]): string {
+  return `/bin/sh -c ${shellQuote(script)} -- ${args.map(shellQuote).join(" ")}`;
 }
 
 export function MacPairingPanel({
@@ -131,10 +158,10 @@ export function MacPairingPanel({
   const baseUrl = origin ?? (typeof window === "undefined" ? "" : publicOrigin(window.location.origin));
   const installCommand = useMemo(() => {
     if (pairing.status !== "waiting") return "";
-    return nodeInstallCommand(initialInstallProgram, baseUrl, pairing.code);
+    return shellInstallCommand(initialInstallScript, baseUrl, pairing.code);
   }, [baseUrl, pairing]);
   const updateCommand = useMemo(
-    () => nodeInstallCommand(updateInstallProgram, baseUrl),
+    () => shellInstallCommand(updateInstallScript, baseUrl),
     [baseUrl]
   );
   const updateRequired = pairing.status === "paired" && pairing.version !== CURRENT_AGENT_VERSION;
@@ -163,7 +190,7 @@ export function MacPairingPanel({
     <Card className="dashboard-panel mac-pairing-card">
       <CardHeader
         header={<Title2 as="h2">连接这台 Mac</Title2>}
-        description={<Text>只需配对一次，之后网站会通过 Codex 接口直接创建任务，不使用剪贴板或辅助功能权限。</Text>}
+        description={<Text>只需配对一次，无需预装 Node.js。之后网站会通过 Codex 接口直接创建任务，不使用剪贴板或辅助功能权限。</Text>}
       />
       {pairing.status === "paired" ? (
         <MessageBar intent={pairing.online && !updateRequired ? "success" : "warning"}>

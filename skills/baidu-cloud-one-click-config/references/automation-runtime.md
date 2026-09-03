@@ -5,6 +5,7 @@
 ## 安装与升级
 
 - 网站首次安装命令必须完成官方受管 Codex CLI、Mac Agent 和本 Skill 的安装或复用，并启动 `app-server daemon`；不得把额外的 Codex 安装步骤留给使用人。
+- 首次配对和升级命令只能依赖 macOS 自带的 `/bin/sh`、`curl`、`plutil` 等系统工具，不得要求使用人预装 Node.js。安装器必须按 Mac 架构获取固定版本的官方 Node.js 运行时、验证 SHA-256，并把受管 Node 的绝对路径写入 LaunchAgent。
 - 首次配对生成设备令牌。后续从同一网站升级 Agent 或 Skill 时必须复用该令牌；只有本机没有配对配置或配置属于其他网站时才重新配对。
 - 启用中央登录后，终端 `curl` 不能复用浏览器 Cookie。首次安装必须先通过公开的一次性配对接口换取并本地保存设备令牌，再从设备 Bearer 保护的资产 API 下载安装器、Agent 和 Skill；升级直接复用已有令牌。不得为解决下载问题公开 `/downloads`，也不得把登录页 HTML 当作安装脚本执行。
 - 从旧生产 IP 升级时，只允许把已验证设备令牌的 `http://118.196.147.13/auto-ux` 配置迁移到 `https://wowdata.guanghexinzhi.cn/auto-ux`；其他跨站地址变化必须重新配对。
